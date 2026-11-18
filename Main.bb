@@ -253,6 +253,9 @@ Else
 	End If
 EndIf
 
+Include "VR.bb"
+VR_Init()
+
 Global GrayScaleFX% = LoadEffect_Strict("GFX\shaders\Grayscale.fx")
 Global MenuScale# = CalculateMenuScale()
 Global HUDScaleScalar# = Max(1.0, MenuScale)
@@ -2125,6 +2128,7 @@ Global TotalVidMem = TotalVidMem()
 Global TotalPhysMem = TotalPhys()
 
 While IsRunning
+	VR_BeginFrame()
 	SetErrorMsg(5, "GPU: " + GFXDriverName + " (" + (TotalVidMem - (AvailVidMem() / 1024)) + "MB/" + TotalVidMem + " MB)")
 	SetErrorMsg(6, "Global memory status: (" + (TotalPhysMem - (AvailPhys() / 1024)) + "MB/" + TotalPhysMem + " MB)")
 
@@ -2164,7 +2168,7 @@ While IsRunning
 	
 	If Input_ResetTime<=0.0
 		DoubleClick = False
-		MouseHit1 = MouseHit(1)
+		MouseHit1 = MouseHit(1) Lor VR_Hit(VRB_INTERACT)
 		If MouseHit1 Then
 			If CurTime - LastMouseHit1 < 800 And Abs(MouseX() - LastMouseHit1X) < 4 And Abs(MouseY() - LastMouseHit1Y) < 4 Then DoubleClick = True
 			LastMouseHit1 = CurTime
@@ -2173,7 +2177,7 @@ While IsRunning
 		EndIf
 		
 		Local prevmousedown1 = MouseDown1
-		MouseDown1 = MouseDown(1)
+		MouseDown1 = MouseDown(1) Lor VR_Down(VRB_INTERACT)
 		If prevmousedown1 = True And MouseDown1=False Then MouseUp1 = True Else MouseUp1 = False
 		
 		MouseHit2 = MouseHit(2)
@@ -2483,7 +2487,7 @@ While IsRunning
 		
 		;[End block]
 		
-		If KeyHit(KEY_INV) And VomitTimer >= 0 And (Not UnableToMove) And (Not IsZombie) And (Not Using294) And KillTimer >= 0 And (Not MenuOpen) And (Not ConsoleOpen) Then
+		If (KeyHit(KEY_INV) Lor VR_Hit(VRB_INVENTORY)) And VomitTimer >= 0 And (Not UnableToMove) And (Not IsZombie) And (Not Using294) And KillTimer >= 0 And (Not MenuOpen) And (Not ConsoleOpen) Then
 			Local W$ = ""
 			Local V# = 0
 			If SelectedItem<>Null
@@ -2725,8 +2729,10 @@ While IsRunning
 		BlitzcordRunCallbacks()
 	EndIf
 
-	Flip Vsync Lor MainMenuOpen
+	VR_Flip(Vsync Lor MainMenuOpen)
 Wend
+
+VR_Shutdown() ; a restart recreates the graphics device, so VR has to start over with it
 
 If ShouldRestart Then
 	IsRestart = True
@@ -3494,7 +3500,7 @@ Function MovePlayer()
 	Local temp#
 	
 	If PlayerRoom\RoomTemplate\Name<>"pocketdimension" Then 
-		If KeyDown(KEY_SPRINT) Then
+		If KeyDown(KEY_SPRINT) Lor VR_Down(VRB_SPRINT) Then
 			If Stamina < 5 Then
 				temp = 0
 				If WearingGasMask>0 Or Wearing1499>0 Then temp=1
@@ -3541,7 +3547,7 @@ Function MovePlayer()
 	
 	If (Not NoClip) Then
 		If ForceMove > 0 Lor Playable And (MoveX <> 0 Lor MoveZ <> 0) Then
-			If Crouch = 0 And (KeyDown(KEY_SPRINT)) And Stamina > 0.0 And (Not IsZombie) Then
+			If Crouch = 0 And (KeyDown(KEY_SPRINT) Lor VR_Down(VRB_SPRINT)) And Stamina > 0.0 And (Not IsZombie) Then
 				Sprint = 2.5
 				Stamina = Stamina - FPSfactor * 0.4 * StaminaEffect
 				If Stamina <= 0 Then Stamina = -20.0
@@ -3600,14 +3606,14 @@ Function MovePlayer()
 			EndIf	
 		EndIf
 	Else ;noclip on
-		If (KeyDown(KEY_SPRINT)) Then 
+		If (KeyDown(KEY_SPRINT) Lor VR_Down(VRB_SPRINT)) Then 
 			Sprint = 2.5
 		ElseIf KeyDown(KEY_CROUCH)
 			Sprint = 0.5
 		EndIf
 	EndIf
 	
-	If KeyHit(KEY_CROUCH) And Playable Then Crouch = (Not Crouch)
+	If (KeyHit(KEY_CROUCH) Lor VR_Hit(VRB_CROUCH)) And Playable Then Crouch = (Not Crouch)
 	
 	Local temp2# = (Speed * Sprint) / (1.0+CrouchState)
 	
@@ -3681,6 +3687,16 @@ Function MovePlayer()
 		Else
 			temp=True
 			angle = ForceAngle
+		EndIf
+		
+		; VR: analog movement from the left stick, relative to where the player is looking
+		If VREnabled And Playable And (Not IsZombie%) And ForceMove <= 0 Then
+			Local vrMoveMag# = VR_MoveMagnitude()
+			If vrMoveMag > 0.0 Then
+				temp = True
+				angle = VR_MoveAngle()
+				temp2 = temp2 * vrMoveMag
+			EndIf
 		EndIf
 		
 		angle = WrapAngle(EntityYaw(Collider,True)+angle+90.0)
@@ -3785,8 +3801,8 @@ Function MovePlayer()
 	EndIf
 		
 	If Playable Then
-		If KeyHit(KEY_BLINK) Then BlinkTimer = 0
-		If KeyDown(KEY_BLINK) And BlinkTimer < - 10 Then BlinkTimer = -10
+		If KeyHit(KEY_BLINK) Lor VR_Hit(VRB_BLINK) Then BlinkTimer = 0
+		If (KeyDown(KEY_BLINK) Lor VR_Down(VRB_BLINK)) And BlinkTimer < - 10 Then BlinkTimer = -10
 	EndIf
 	
 	
@@ -3831,6 +3847,9 @@ Function MouseLook(handleInput% = True)
 		EndIf
 		;EndIf
 		
+		If VREnabled Then
+			VR_UpdateHeadCamera(handleInput)
+		Else
 		Local up# = (Sin(Shake) / (20.0+CrouchState*20.0))*0.6*ViewBobScale;, side# = Cos(Shake / 2.0) / 35.0		
 		Local roll# = Max(Min(Sin(Shake/2)*2.5*Min(Injuries+0.25,3.0),8.0),-8.0)*ViewBobScale
 		
@@ -3878,6 +3897,7 @@ Function MouseLook(handleInput% = True)
 				RotateEntity Camera, WrapAngle(EntityPitch(Camera)),WrapAngle(EntityYaw(Camera)), roll+WrapAngle(Sin(MilliSecs()/150.0)*30.0)*ViewBobScale ; Pitch the user;s camera up And down.
 			EndIf
 		EndIf
+		EndIf ; VREnabled
 		
 	Else
 		HideEntity Collider
@@ -4382,7 +4402,7 @@ Function DrawGUI()
 		KeypadMSG = ""
 	EndIf
 	
-	If KeyHit(1) And EndingTimer=0 And SelectedEnding="" And (Not Using294) Then
+	If (KeyHit(1) Lor VR_Hit(VRB_MENU)) And EndingTimer=0 And SelectedEnding="" And (Not Using294) Then
 		If (MenuOpen Or InvOpen) And OptionsMenu <> 0 Then SaveOptionsINI()
 		MenuOpen = (Not MenuOpen)
 		UpdateMenuState()
@@ -11356,10 +11376,10 @@ Function RenderWorld2()
 		Next
 		
 		If (hasBattery) Then
-			RenderWorld()
+			RenderWorldMain()
 		EndIf
 	Else
-		RenderWorld()
+		RenderWorldMain()
 	EndIf
 	
 	CurrTrisAmount = TrisRendered()
@@ -11754,13 +11774,13 @@ Function PlayMovie(moviefile$)
 	Repeat
 		Cls
 		DrawMovie(SplashScreenVideo, 0, (RealGraphicHeight/2-ScaledGraphicHeight/2), RealGraphicWidth, ScaledGraphicHeight)
-		Flip
+		VR_Flip()
 	Until (GetKey() Or (Not IsStreamPlaying_Strict(SplashScreenAudio)))
 	StopStream_Strict(SplashScreenAudio)
 	CloseMovie(SplashScreenVideo)
 	
 	Cls
-	Flip
+	VR_Flip()
 
 End Function
 

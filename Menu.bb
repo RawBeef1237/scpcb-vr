@@ -2089,12 +2089,12 @@ Function DrawLoading(percent%, shortloading=False)
 		
 		ApplyBorderlessResizing()
 		
-		Flip False
+		VR_Flip(False)
 		
 		firstloop = False
 		If percent <> 100 Then Exit
 		
-	Until (GetKey()<>0 Or MouseHit(1))
+	Until (GetKey()<>0 Or MouseHit(1) Or VR_Hit(VRB_INTERACT))
 	Cls
 End Function
 

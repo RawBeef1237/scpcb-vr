@@ -1006,7 +1006,7 @@ Function GenForestGrid(fr.Forest)
 			Color(255, 255, 255)
 			Text(GraphicWidth / 2, GraphicHeight - 25 * HUDScale, I_Loc\Menu_Pressany, True, True)
 			
-			Flip()
+			VR_Flip()
 		Until GetKey() <> 0
 		FlushKeys()
 	EndIf
@@ -7703,7 +7703,7 @@ Function DrawDebugMap()
 		Color 255, 255, 255
 		Text(GraphicWidth / 2, GraphicHeight - 25 * HUDScale, I_Loc\Menu_Pressany, True, True)
 		
-		Flip
+		VR_Flip()
 	Until GetKey() <> 0
 	FlushKeys()
 End Function

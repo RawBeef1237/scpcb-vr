@@ -91,7 +91,10 @@ Function VR_Flip(vsync% = True)
 	If VREnabled Then
 		XR_BeginFrame() ; loading screens and menus call Flip without a VR_BeginFrame, this starts their frame
 		If XR_FrameBegun() Then
-			If Not VRStereoThisFrame Then XR_SubmitQuad(BufferD3D9Surface(BackBuffer()))
+			If Not VRStereoThisFrame Then
+				VR_UpdatePointer()
+				XR_SubmitQuad(BufferD3D9Surface(BackBuffer()))
+			EndIf
 			XR_EndFrame()
 			VRStereoThisFrame = False
 			Flip False
@@ -112,6 +115,23 @@ Function VR_StereoActive%()
 End Function
 
 ;---------------------------------------------------------------------------------------------------- input
+
+Global VRPointerLastX% = -1, VRPointerLastY% = -1
+
+Function VR_UpdatePointer()
+	If Not XR_PointerValid() Then Return
+	Local x% = Int(XR_PointerX() * GraphicsWidth())
+	Local y% = Int(XR_PointerY() * GraphicsHeight())
+	If Abs(x - VRPointerLastX) > 1 Lor Abs(y - VRPointerLastY) > 1 Then
+		MoveMouse x, y
+		VRPointerLastX = x : VRPointerLastY = y
+	EndIf
+	SetBuffer BackBuffer()
+	Color 0, 0, 0
+	Oval MouseX() - 7, MouseY() - 7, 14, 14, True
+	Color 255, 255, 255
+	Oval MouseX() - 5, MouseY() - 5, 10, 10, True
+End Function
 
 Function VR_Down%(button%)
 	If Not VREnabled Then Return False

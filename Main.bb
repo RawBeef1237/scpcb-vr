@@ -214,6 +214,11 @@ For m.ActiveMods = Each ActiveMods
 Next
 LoadLocalization(I_Loc, StringsFile)
 
+; VR renderer: "dxvk" (or -dxvk) runs the game on DXVK, Direct3D 9 on Vulkan, from dxvk\d3d9.dll, and VR then
+; goes through Vulkan instead of the default D3D11 bridge. Has to be set before the first graphics command.
+If (Lower(Trim(GetOptionString("vr", "renderer"))) = "dxvk" Lor HasCLIFlag("dxvk")) And (Not HasCLIFlag("nodxvk")) Then
+	SetEnv "BLITZ_D3D9", "dxvk"
+EndIf
 
 ; Exclusive fullscreen ONLY supports the reported resolutions
 If (LauncherEnabled Lor HasCLIFlag("launcher")) And (Not IsRestart) And (Not HasCLIFlag("nolauncher")) Lor Fullscreen And (Not GfxMode3DExists(GraphicWidth, GraphicHeight, 32)) Then

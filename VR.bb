@@ -11,7 +11,10 @@
 ;   VR_BeginFrame()   top of the main loop: waits for the headset, reads head + controller poses
 ;   MouseLook()       puts Camera at the player's head (VR_UpdateHeadCamera)
 ;   RenderWorld2()    RenderWorldMain() renders each eye into its own texture and hands it to OpenXR
-;   VR_Flip()         ends the OpenXR frame; menus and loading screens are shown on a floating screen
+;   VR_Flip()         ends the OpenXR frame. The 2D layer the game drew this frame (HUD, inventory,
+;                     pause menu) goes over the 3D view: the HUD floats in front of your face, menus
+;                     and inventory on a panel that stays where it opened. The main menu and loading
+;                     screens have no 3D view and are shown on their own floating screen.
 ;
 ; Licensed CC BY-SA 3.0, same as the game.
 ;----------------------------------------------------------------------------------------------------
@@ -52,6 +55,9 @@ Function VR_Init()
 		VREnabled = True
 		XR_SetWorldScale(VRWorldScale)
 		XR_SetQuad(2.4, 2.0)
+		f = GetOptionFloat("vr", "hud width") : If f <= 0.0 Then f = 1.3
+		Local d# = GetOptionFloat("vr", "hud distance") : If d <= 0.0 Then d = 1.5
+		XR_SetHud(f, d)
 		VREyeW = XR_EyeWidth()
 		VREyeH = XR_EyeHeight()
 		Local i%
@@ -91,11 +97,21 @@ Function VR_Flip(vsync% = True)
 	If VREnabled Then
 		XR_BeginFrame() ; loading screens and menus call Flip without a VR_BeginFrame, this starts their frame
 		If XR_FrameBegun() Then
-			If Not VRStereoThisFrame Then
+			If VRStereoThisFrame Then
+				; the back buffer holds only what the game drew in 2D this frame, on black
+				If VR_PanelOpen() Then
+					VR_UpdatePointer()
+					XR_SubmitOverlay(BufferD3D9Surface(BackBuffer()), 2)
+				Else
+					XR_SubmitOverlay(BufferD3D9Surface(BackBuffer()), 1)
+				EndIf
+				XR_EndFrame()
+				VR_DrawMirror()
+			Else
 				VR_UpdatePointer()
 				XR_SubmitQuad(BufferD3D9Surface(BackBuffer()))
+				XR_EndFrame()
 			EndIf
-			XR_EndFrame()
 			VRStereoThisFrame = False
 			Flip False
 			Return
@@ -104,24 +120,52 @@ Function VR_Flip(vsync% = True)
 	Flip vsync
 End Function
 
-; Stereo is used in normal gameplay. Anything 2D (menus, inventory, documents, keypads) is shown
-; on the floating screen instead until the controller pointer milestone.
+; Stereo is used whenever there is a level loaded, including while paused or in the inventory.
 Function VR_StereoActive%()
 	If Not VREnabled Then Return False
 	If Not VRShouldRender Then Return False
 	If MainMenuOpen Then Return False
-	If IsPaused() Then Return False
 	Return True
+End Function
+
+; Screens that need the pointer: shown on a panel that stays in place instead of the head-locked HUD.
+Function VR_PanelOpen%()
+	If IsPaused() Then Return True
+	If Using294 Then Return True
+	If ConsoleOpen Then Return True
+	Return False
+End Function
+
+; While paused the game skips MouseLook, but the headset still needs the camera to follow your head.
+Function VR_UpdatePausedCamera()
+	If Not VREnabled Then Return
+	If MainMenuOpen Then Return
+	If IsPaused() Lor EndingTimer < 0 Then VR_UpdateHeadCamera(False)
 End Function
 
 ;---------------------------------------------------------------------------------------------------- input
 
+; Laser pointer for the floating screen: aim a controller at it to move the mouse, right trigger clicks
+; (the trigger is already mapped to mouse button 1 through VR_Hit/VR_Down(VRB_INTERACT)).
 Global VRPointerLastX% = -1, VRPointerLastY% = -1
+Global VRPointerSX# = -1.0, VRPointerSY# = -1.0
 
 Function VR_UpdatePointer()
-	If Not XR_PointerValid() Then Return
-	Local x% = Int(XR_PointerX() * GraphicsWidth())
-	Local y% = Int(XR_PointerY() * GraphicsHeight())
+	If Not XR_PointerValid() Then
+		VRPointerSX = -1.0
+		Return
+	EndIf
+	Local tx# = XR_PointerX() * GraphicsWidth()
+	Local ty# = XR_PointerY() * GraphicsHeight()
+	; smooth out hand shake so buttons and double-clicks are easy to hit
+	If VRPointerSX < 0.0 Then
+		VRPointerSX = tx : VRPointerSY = ty
+	Else
+		VRPointerSX = VRPointerSX + (tx - VRPointerSX) * 0.45
+		VRPointerSY = VRPointerSY + (ty - VRPointerSY) * 0.45
+	EndIf
+	Local x% = Int(VRPointerSX), y% = Int(VRPointerSY)
+	; only move the mouse when the pointer moves, so a real mouse still works when the controller is still
 	If Abs(x - VRPointerLastX) > 1 Lor Abs(y - VRPointerLastY) > 1 Then
 		MoveMouse x, y
 		VRPointerLastX = x : VRPointerLastY = y
@@ -258,7 +302,16 @@ Function VR_RenderEyes%()
 	CameraViewport Camera, 0, 0, GraphicWidth, GraphicHeight
 	If ark_blur_cam <> 0 Then CameraViewport ark_blur_cam, 0, 0, ark_sw, ark_sh
 
-	; desktop mirror: left eye, cropped to the window's shape
+	; the desktop mirror is drawn in VR_Flip, after the 2D layer has gone to the headset
+	SetBuffer BackBuffer()
+	Cls
+	VRStereoThisFrame = True
+	Return True
+End Function
+
+; Desktop window: the left eye, cropped to the window's shape. (The HUD is only in the headset.)
+Function VR_DrawMirror()
+	If VREyeTex(0) = 0 Then Return
 	Local sw% = VREyeW, sh% = VREyeH, sx% = 0, sy% = 0
 	If Float(VREyeW) / VREyeH < Float(GraphicWidth) / GraphicHeight Then
 		sh = VREyeW * GraphicHeight / GraphicWidth : sy = (VREyeH - sh) / 2
@@ -266,9 +319,6 @@ Function VR_RenderEyes%()
 		sw = VREyeH * GraphicWidth / GraphicHeight : sx = (VREyeW - sw) / 2
 	EndIf
 	CopyRectStretch sx, sy, sw, sh, 0, 0, GraphicWidth, GraphicHeight, TextureBuffer(VREyeTex(0)), BackBuffer()
-
-	VRStereoThisFrame = True
-	Return True
 End Function
 
 ;~IDEal Editor Parameters:

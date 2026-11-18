@@ -2170,7 +2170,7 @@ While IsRunning
 		DoubleClick = False
 		MouseHit1 = MouseHit(1) Lor VR_Hit(VRB_INTERACT)
 		If MouseHit1 Then
-			If CurTime - LastMouseHit1 < 800 And Abs(MouseX() - LastMouseHit1X) < 4 And Abs(MouseY() - LastMouseHit1Y) < 4 Then DoubleClick = True
+			If CurTime - LastMouseHit1 < 800 And Abs(MouseX() - LastMouseHit1X) < 4 + VREnabled * 20 And Abs(MouseY() - LastMouseHit1Y) < 4 + VREnabled * 20 Then DoubleClick = True
 			LastMouseHit1 = CurTime
 			LastMouseHit1X = MouseX()
 			LastMouseHit1Y = MouseY()
@@ -2350,6 +2350,7 @@ While IsRunning
 			ManipulateNPCBones()
 		EndIf
 		CatchErrors("UpdateWorld")
+		VR_UpdatePausedCamera()
 		RenderWorld2()
 		
 		BlurVolume = Min(CurveValue(0.0, BlurVolume, 20.0),0.95)
@@ -3546,7 +3547,7 @@ Function MovePlayer()
 	EndIf
 	
 	If (Not NoClip) Then
-		If ForceMove > 0 Lor Playable And (MoveX <> 0 Lor MoveZ <> 0) Then
+		If ForceMove > 0 Lor Playable And (MoveX <> 0 Lor MoveZ <> 0 Lor VR_MoveMagnitude() > 0.0) Then
 			If Crouch = 0 And (KeyDown(KEY_SPRINT) Lor VR_Down(VRB_SPRINT)) And Stamina > 0.0 And (Not IsZombie) Then
 				Sprint = 2.5
 				Stamina = Stamina - FPSfactor * 0.4 * StaminaEffect

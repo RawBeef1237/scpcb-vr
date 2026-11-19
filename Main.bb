@@ -2509,7 +2509,7 @@ While IsRunning
 			EndIf
 		EndIf
 		
-		If KeyHit(KEY_SAVE) And (Not ConsoleOpen) Then
+		If (KeyHit(KEY_SAVE) Lor VR_Hit(VRB_SAVE)) And (Not ConsoleOpen) Then
 			If SelectedDifficulty\saveType = SAVEANYWHERE Then
 				RN$ = PlayerRoom\RoomTemplate\Name$
 				If RN$ = "173" Or (RN$ = "exit1" And EntityY(Collider)>1040.0*RoomScale) Or RN$ = "gatea"

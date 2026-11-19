@@ -21,7 +21,7 @@
 
 ; controller buttons (BlitzXR button ids)
 Const VRB_BLINK% = 0, VRB_SPRINT% = 1, VRB_CROUCH% = 2, VRB_INTERACT% = 3
-Const VRB_INVENTORY% = 4, VRB_MENU% = 5, VRB_RECENTER% = 6
+Const VRB_INVENTORY% = 4, VRB_MENU% = 5, VRB_SAVE% = 6 ; Y saves (recentring is done by the VR software)
 
 Global VRWanted% = (GetOptionInt("vr", "enabled") Lor HasCLIFlag("vr")) And (Not HasCLIFlag("novr"))
 Global VREnabled% = False
@@ -33,8 +33,13 @@ Global VRSnapTurn% = True
 Global VRSnapAngle# = 30.0
 Global VRSmoothTurnSpeed# = 2.5
 
-; real-life crouching: crouch in game when your head is this many metres below where it was at the last
-; recentre, stand again 0.1 m above that (so it doesn't flicker)
+; standing height: head height shortly after VR starts and after every recentre by the VR software
+; (hold the Oculus / system button). The view treats it as the player's normal eye height.
+Global VRStandHeadY# = 0.0
+Global VRStandCaptureIn% = 30       ; frames until the standing height is (re)captured, -1 = captured
+
+; real-life crouching: crouch in game when your head is this many metres below the standing height,
+; stand again 0.1 m above that (so it doesn't flicker)
 Global VRRealCrouchEnabled% = True
 Global VRCrouchHeight# = 0.45
 Global VRRealCrouch% = False        ; head is down right now
@@ -251,7 +256,8 @@ Function VR_UpdateRealCrouch()
 		VRRealCrouch = False : VRCrouchByHead = False : VRNoCrouchOffset = False
 		Return
 	EndIf
-	Local drop# = -XR_Head(1) / VRWorldScale ; metres below the standing height from the last recentre
+	If VRStandCaptureIn >= 0 Then Return ; standing height not captured yet
+	Local drop# = (VRStandHeadY - XR_Head(1)) / VRWorldScale ; metres below the standing height
 	If (Not VRRealCrouch) And drop > VRCrouchHeight Then
 		VRRealCrouch = True
 		If (Not Crouch) And (Not IsZombie) And Playable Then
@@ -283,6 +289,14 @@ Function VR_UpdateHeadCamera(handleInput%)
 	EndIf
 	mouse_x_speed_1 = 0 : mouse_y_speed_1 = 0
 
+	; re-capture the standing height a moment after the VR software recentres (the change takes effect a
+	; little after it is announced) and once at startup, when the first head poses have arrived
+	If XR_SpaceChanged() Then VRStandCaptureIn = 30
+	If VRStandCaptureIn >= 0 Then
+		VRStandCaptureIn = VRStandCaptureIn - 1
+		If VRStandCaptureIn < 0 Then VRStandHeadY = XR_Head(1)
+	EndIf
+
 	If handleInput Then VR_UpdateRealCrouch()
 
 	PositionEntity Camera, EntityX(Collider), EntityY(Collider), EntityZ(Collider)
@@ -292,7 +306,7 @@ Function VR_UpdateHeadCamera(handleInput%)
 	Else
 		MoveEntity Camera, 0, 0.6 + CrouchState * -0.3, 0
 	EndIf
-	MoveEntity Camera, XR_Head(0), XR_Head(1), XR_Head(2)
+	MoveEntity Camera, XR_Head(0), XR_Head(1) - VRStandHeadY, XR_Head(2)
 	TurnEntity Camera, XR_Head(3), XR_Head(4), XR_Head(5)
 	user_camera_pitch = EntityPitch(Camera, True)
 

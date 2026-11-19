@@ -33,6 +33,14 @@ Global VRSnapTurn% = True
 Global VRSnapAngle# = 30.0
 Global VRSmoothTurnSpeed# = 2.5
 
+; real-life crouching: crouch in game when your head is this many metres below where it was at the last
+; recentre, stand again 0.1 m above that (so it doesn't flicker)
+Global VRRealCrouchEnabled% = True
+Global VRCrouchHeight# = 0.45
+Global VRRealCrouch% = False        ; head is down right now
+Global VRCrouchByHead% = False      ; Crouch was switched on by the head, not the crouch button
+Global VRNoCrouchOffset% = False    ; the view follows the real head, so skip the game's crouch camera drop
+
 Global VREyeW%, VREyeH%
 Dim VREyeTex%(1)
 
@@ -50,6 +58,8 @@ Function VR_Init()
 	If GetOptionString("vr", "snap turn") <> "" Then VRSnapTurn = GetOptionInt("vr", "snap turn")
 	f = GetOptionFloat("vr", "snap angle") : If f > 0.0 Then VRSnapAngle = f
 	f = GetOptionFloat("vr", "smooth turn speed") : If f > 0.0 Then VRSmoothTurnSpeed = f
+	If GetOptionString("vr", "real crouch") <> "" Then VRRealCrouchEnabled = GetOptionInt("vr", "real crouch")
+	f = GetOptionFloat("vr", "crouch height") : If f > 0.0 Then VRCrouchHeight = f
 
 	If XR_Init(GraphicsD3D9Device(), "SCP - Containment Breach VR", VRResScale) Then
 		VREnabled = True
@@ -171,10 +181,16 @@ Function VR_UpdatePointer()
 		VRPointerLastX = x : VRPointerLastY = y
 	EndIf
 	SetBuffer BackBuffer()
-	Color 0, 0, 0
-	Oval MouseX() - 7, MouseY() - 7, 14, 14, True
-	Color 255, 255, 255
-	Oval MouseX() - 5, MouseY() - 5, 10, 10, True
+	If CursorIMG <> 0 Then
+		; the game's own cursor (GFX\cursor.png, loaded in Main.bb), hotspot at its top-left like the desktop cursor
+		DrawImage CursorIMG, MouseX(), MouseY()
+	Else
+		; before the cursor image is loaded (early loading screens)
+		Color 0, 0, 0
+		Oval MouseX() - 7, MouseY() - 7, 14, 14, True
+		Color 255, 255, 255
+		Oval MouseX() - 5, MouseY() - 5, 10, 10, True
+	EndIf
 End Function
 
 Function VR_Down%(button%)
@@ -227,6 +243,31 @@ Function VR_AngleDelta#(a#, b#)
 	Return d
 End Function
 
+; Crouching in real life crouches in game (Crouch drives speed, noise and the game's crouch logic).
+; The crouch button still toggles as before: the head only switches Crouch on when it goes down, and
+; only switches it back off when it comes up if the head was what turned it on.
+Function VR_UpdateRealCrouch()
+	If Not VRRealCrouchEnabled Then
+		VRRealCrouch = False : VRCrouchByHead = False : VRNoCrouchOffset = False
+		Return
+	EndIf
+	Local drop# = -XR_Head(1) / VRWorldScale ; metres below the standing height from the last recentre
+	If (Not VRRealCrouch) And drop > VRCrouchHeight Then
+		VRRealCrouch = True
+		If (Not Crouch) And (Not IsZombie) And Playable Then
+			Crouch = True
+			VRCrouchByHead = True
+			VRNoCrouchOffset = True ; (if the button had already crouched you, the view keeps the game's drop: no jump)
+		EndIf
+	ElseIf VRRealCrouch And drop < VRCrouchHeight - 0.1 Then
+		VRRealCrouch = False
+		If VRCrouchByHead And Crouch Then Crouch = False
+		VRCrouchByHead = False
+	EndIf
+	; keep following the real head until the game's crouch has fully eased back, so the view doesn't jump
+	If VRNoCrouchOffset And (Not VRRealCrouch) And CrouchState < 0.01 Then VRNoCrouchOffset = False
+End Function
+
 ; Called from MouseLook instead of the mouse-look code. Puts Camera where the player's head is.
 Function VR_UpdateHeadCamera(handleInput%)
 	; if game code turned the player (spawn, teleport, cutscene), turn the body with it
@@ -242,9 +283,15 @@ Function VR_UpdateHeadCamera(handleInput%)
 	EndIf
 	mouse_x_speed_1 = 0 : mouse_y_speed_1 = 0
 
+	If handleInput Then VR_UpdateRealCrouch()
+
 	PositionEntity Camera, EntityX(Collider), EntityY(Collider), EntityZ(Collider)
 	RotateEntity Camera, 0, VRBodyYaw, 0
-	MoveEntity Camera, 0, 0.6 + CrouchState * -0.3, 0
+	If VRNoCrouchOffset Then
+		MoveEntity Camera, 0, 0.6, 0 ; crouched for real: the head pose below already lowers the view
+	Else
+		MoveEntity Camera, 0, 0.6 + CrouchState * -0.3, 0
+	EndIf
 	MoveEntity Camera, XR_Head(0), XR_Head(1), XR_Head(2)
 	TurnEntity Camera, XR_Head(3), XR_Head(4), XR_Head(5)
 	user_camera_pitch = EntityPitch(Camera, True)

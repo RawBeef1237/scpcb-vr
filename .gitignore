@@ -16,3 +16,9 @@ updates/
 SCP - Containment Breach.exe
 cb.zip
 Scripts/out/
+# VR build: local backups, logs, the built exe, user settings
+*.bak*
+*.log
+runtime_error*.txt
+SCP - Containment Breach VR.exe
+options.ini

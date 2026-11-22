@@ -14,3 +14,7 @@ Requirements:
 > Make sure to copy all .decls files from this repo's `Userlibs` folder to your Blitz3D installation's `userlibs` folder before compiling.
 
 Beware - the source code is perhaps more horrifying than the game itself!
+
+## VR
+
+This fork adds OpenXR VR support. See [VR/README.md](VR/README.md).

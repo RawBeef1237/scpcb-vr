@@ -1,0 +1,8 @@
+Hand models and texture in GFX\VR (handleft.b3d, handright.b3d, T_VRHands_Base_color.jpg)
+
+"Free Pack - VR Hands (Rigged)" by PolyOne Studio (@polyone)
+https://sketchfab.com/3d-models/free-pack-vr-hands-rigged-b3b8309e59c748e3956531c8f57dd233
+Licensed under Creative Commons Attribution 4.0 International (CC BY 4.0):
+https://creativecommons.org/licenses/by/4.0/
+
+Changes: converted to Blitz3D .b3d (one file per hand) and re-posed for use as tracked VR hands.

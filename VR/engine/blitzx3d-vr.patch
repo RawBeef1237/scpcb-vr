@@ -1,0 +1,773 @@
+From 34536527237a139901abc41044bfa8df7a96ca1f Mon Sep 17 00:00:00 2001
+From: Aiden <RawBeef1237@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 16:00:58 +0000
+Subject: [PATCH 1/5] Add VR rendering hooks: off-axis camera projection,
+ RenderWorld into texture, raw D3D9 pointers for userlibs
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013tr8JLrY7n4TkyRbm3YHjk
+---
+ bbruntime/bbblitz3d.cpp  | 36 ++++++++++++++++++++++++++++++
+ bbruntime/bbgraphics.cpp | 15 +++++++++++++
+ blitz3d/camera.cpp       | 16 ++++++++++++++
+ blitz3d/camera.h         |  5 +++++
+ blitz3d/frustum.cpp      | 14 ++++++++++++
+ blitz3d/frustum.h        |  2 ++
+ gxruntime/gxscene.cpp    | 47 ++++++++++++++++++++++++++++++++++------
+ gxruntime/gxscene.h      |  7 ++++++
+ 8 files changed, 135 insertions(+), 7 deletions(-)
+
+diff --git a/bbruntime/bbblitz3d.cpp b/bbruntime/bbblitz3d.cpp
+index 6d238a4..6372ab9 100644
+--- a/bbruntime/bbblitz3d.cpp
++++ b/bbruntime/bbblitz3d.cpp
+@@ -520,6 +520,9 @@ Texture* bbCreateTexture(int w, int h, int flags, int frames) {
+ void bbFreeTexture(Texture* t) {
+ 	if (!t) return;
+ 	debugTexture(t, "FreeTexture");
++	if (gx_scene && gx_scene->getRenderTargetOverride() && gx_scene->getRenderTargetOverride() == t->getCanvas(0)) {
++		gx_scene->setRenderTargetOverride(nullptr);
++	}
+ 	if (texture_set.erase(t)) delete t;
+ }
+ 
+@@ -1226,6 +1229,37 @@ Entity* bbCreateCamera(Entity* p) {
+ 	return insertEntity(c, p);
+ }
+ 
++// ---- VR support -------------------------------------------------------------
++// CameraProjOffAxis camera, tanLeft#, tanRight#, tanUp#, tanDown#
++// Asymmetric perspective projection (per-eye FOV from OpenXR). Left/down are negative.
++// Pass all zeros to go back to the normal CameraZoom projection.
++void  bbCameraProjOffAxis(Camera* c, float l, float r, float u, float d) {
++	debugCamera(c, "CameraProjOffAxis");
++	c->setOffAxis(l, r, u, d);
++}
++
++// SetRenderWorldBuffer buffer
++// Makes RenderWorld draw into a texture buffer (created with CreateTexture) instead of
++// the back buffer. Pass 0 to go back to the back buffer.
++void  bbSetRenderWorldBuffer(gxCanvas* c) {
++	if (!gx_scene) {
++		ErrorLog("SetRenderWorldBuffer", MultiLang::graphics_not_set);
++		return;
++	}
++	if (c == gx_graphics->getBackCanvas()) c = nullptr;
++	if (c) {
++		if (!gx_graphics->verifyCanvas(c) || !c->getSurface()) {
++			ErrorLog("SetRenderWorldBuffer", MultiLang::buffer_not_exist);
++			return;
++		}
++		D3DSURFACE_DESC desc;
++		if (FAILED(c->getSurface()->GetDesc(&desc)) || !(desc.Usage & D3DUSAGE_RENDERTARGET)) {
++			RTEX("SetRenderWorldBuffer: buffer is not a render target texture");
++		}
++	}
++	gx_scene->setRenderTargetOverride(c);
++}
++
+ void  bbCameraZoom(Camera* c, float zoom) {
+ 	debugCamera(c, "CameraZoom");
+ 	c->setZoom(zoom);
+@@ -2814,6 +2848,8 @@ void blitz3d_link(void (*rtSym)(const char* sym, void* pc)) {
+ 
+ 	rtSym("%CreateCamera%parent=0", bbCreateCamera);
+ 	rtSym("CameraZoom%camera#zoom", bbCameraZoom);
++	rtSym("CameraProjOffAxis%camera#left#right#up#down", bbCameraProjOffAxis);
++	rtSym("SetRenderWorldBuffer%buffer", bbSetRenderWorldBuffer);
+ 	rtSym("CameraRange%camera#near#far", bbCameraRange);
+ 	rtSym("#GetCameraRangeNear%camera", bbGetCameraRangeNear);
+ 	rtSym("#GetCameraRangeFar%camera", bbGetCameraRangeFar);
+diff --git a/bbruntime/bbgraphics.cpp b/bbruntime/bbgraphics.cpp
+index e2c5eac..31df64a 100644
+--- a/bbruntime/bbgraphics.cpp
++++ b/bbruntime/bbgraphics.cpp
+@@ -976,6 +976,19 @@ gxCanvas* bbBackBuffer()
+     return gx_graphics->getBackCanvas();
+ }
+ 
++// ---- VR support -------------------------------------------------------------
++// Raw Direct3D pointers for native userlibs (e.g. the OpenXR bridge). 32-bit only.
++int bbGraphicsD3D9Device()
++{
++    return gx_graphics ? (int)(intptr_t)gx_graphics->dir3dDev : 0;
++}
++
++int bbBufferD3D9Surface(gxCanvas* buff)
++{
++    if (!buff || !gx_graphics || !gx_graphics->verifyCanvas(buff)) return 0;
++    return (int)(intptr_t)buff->getSurface();
++}
++
+ void bbLockBuffer(gxCanvas* buff)
+ {
+     if (buff) debugCanvas(buff, "LockBuffer");
+@@ -2561,6 +2574,8 @@ void graphics_link(void (*rtSym)(const char* sym, void* pc))
+ 
+     rtSym("%FrontBuffer", bbFrontBuffer);
+     rtSym("%BackBuffer", bbBackBuffer);
++    rtSym("%GraphicsD3D9Device", bbGraphicsD3D9Device);
++    rtSym("%BufferD3D9Surface%buffer", bbBufferD3D9Surface);
+     rtSym("%ScanLine", bbScanLine);
+     rtSym("VWait%frames=1", bbVWait);
+     rtSym("Flip%vwait=1", bbFlip);
+diff --git a/blitz3d/camera.cpp b/blitz3d/camera.cpp
+index daceb4f..ba49ba8 100644
+--- a/blitz3d/camera.cpp
++++ b/blitz3d/camera.cpp
+@@ -42,6 +42,7 @@ void Camera::setClsMode(bool c, bool z) {
+ 
+ void Camera::setProjMode(int mode) {
+ 	proj_mode = mode;
++	local_valid = false;
+ }
+ 
+ void Camera::setFogColor(const Vector& v) {
+@@ -77,7 +78,19 @@ void Camera::setColorWrite(int enable) {
+ 	color_write = enable;
+ }
+ 
++void Camera::setOffAxis(float l, float r, float u, float d) {
++	off_axis = (r - l) > 0.0001f && (u - d) > 0.0001f;
++	tan_l = l; tan_r = r; tan_u = u; tan_d = d;
++	local_valid = false;
++}
++
+ const Frustum& Camera::getFrustum()const {
++	if (!local_valid && off_axis && proj_mode == PROJ_PERSP) {
++		frustum_w = frustum_nr * (tan_r - tan_l);
++		frustum_h = frustum_nr * (tan_u - tan_d);
++		new(&local_frustum) Frustum(frustum_nr, frustum_fr, frustum_nr * tan_l, frustum_nr * tan_r, frustum_nr * tan_d, frustum_nr * tan_u);
++		local_valid = true;
++	}
+ 	if (!local_valid) {
+ 		float ar = (float)vp_h / vp_w;
+ 		frustum_w = frustum_nr * 2 / zoom;
+@@ -124,6 +137,9 @@ bool Camera::beginRenderFrame() {
+ 	if (proj_mode == PROJ_ORTHO) {
+ 		gx_scene->setOrthoProj(frustum_nr, frustum_fr, frustum_w, frustum_h);
+ 	}
++	else if (off_axis) {
++		gx_scene->setPerspProjOffAxis(frustum_nr, frustum_fr, frustum_nr * tan_l, frustum_nr * tan_r, frustum_nr * tan_d, frustum_nr * tan_u);
++	}
+ 	else {
+ 		gx_scene->setPerspProj(frustum_nr, frustum_fr, frustum_w, frustum_h);
+ 	}
+diff --git a/blitz3d/camera.h b/blitz3d/camera.h
+index 0697855..a126dbd 100644
+--- a/blitz3d/camera.h
++++ b/blitz3d/camera.h
+@@ -29,6 +29,9 @@ public:
+ 	void setDepthBias(float bias, float slope);
+ 	void setReverseZ(int enable);
+ 	void setColorWrite(int enable);
++	// VR: per-eye asymmetric projection, given as view-space tangents (left/down negative). All zero = off.
++	void setOffAxis(float tan_l, float tan_r, float tan_u, float tan_d);
++	bool isOffAxis()const { return off_axis; }
+ 
+ 	//called by world
+ 	bool beginRenderFrame();
+@@ -58,6 +61,8 @@ private:
+ 	int cull_mode = -1;
+ 	float depth_bias = 0, slope_bias = 0;
+ 	int reverse_z = 0, color_write = 1;
++	bool off_axis = false;
++	float tan_l = 0, tan_r = 0, tan_u = 0, tan_d = 0;
+ 	mutable float frustum_w, frustum_h;
+ 	mutable Frustum local_frustum;
+ 	mutable bool local_valid;
+diff --git a/blitz3d/frustum.cpp b/blitz3d/frustum.cpp
+index 9609a0f..5643074 100644
+--- a/blitz3d/frustum.cpp
++++ b/blitz3d/frustum.cpp
+@@ -18,6 +18,20 @@ Frustum::Frustum(float nr, float fr, float w, float h) {
+ 	makePlanes();
+ }
+ 
++Frustum::Frustum(float nr, float fr, float l, float r, float b, float t) {
++	verts[VERT_TLNEAR] = Vector(l, t, nr);
++	verts[VERT_TRNEAR] = Vector(r, t, nr);
++	verts[VERT_BRNEAR] = Vector(r, b, nr);
++	verts[VERT_BLNEAR] = Vector(l, b, nr);
++	float s = fr / nr;
++	verts[VERT_TLFAR] = verts[VERT_TLNEAR] * s;
++	verts[VERT_TRFAR] = verts[VERT_TRNEAR] * s;
++	verts[VERT_BRFAR] = verts[VERT_BRNEAR] * s;
++	verts[VERT_BLFAR] = verts[VERT_BLNEAR] * s;
++	verts[VERT_EYE] = Vector();
++	makePlanes();
++}
++
+ Frustum::Frustum(const Frustum& f, const Transform& t) {
+ 	for (int k = 0; k < 9; ++k) {
+ 		verts[k] = t * f.verts[k];
+diff --git a/blitz3d/frustum.h b/blitz3d/frustum.h
+index 9db79b3..b978020 100644
+--- a/blitz3d/frustum.h
++++ b/blitz3d/frustum.h
+@@ -14,6 +14,8 @@ public:
+ 	};
+ 	Frustum();
+ 	Frustum(float nr, float fr, float w, float h);
++	// VR: asymmetric frustum from near-plane extents (left/right/bottom/top at distance nr)
++	Frustum(float nr, float fr, float l, float r, float b, float t);
+ 	Frustum(const Frustum& f, const Transform& t);
+ 
+ 	bool cull(const Box& box)const;
+diff --git a/gxruntime/gxscene.cpp b/gxruntime/gxscene.cpp
+index 42202c2..093d404 100644
+--- a/gxruntime/gxscene.cpp
++++ b/gxruntime/gxscene.cpp
+@@ -510,8 +510,9 @@ void gxScene::setViewport(int x, int y, int w, int h) {
+ }
+ 
+ void gxScene::setOrthoProj(float nr, float fr, float w, float h) {
+-	if(ortho_proj && nr == frustum_nr && fr == frustum_fr && w == frustum_w && h == frustum_h) return;
+-	frustum_nr = nr; frustum_fr = fr; frustum_w = w; frustum_h = h; ortho_proj = true;
++	if(ortho_proj && !off_axis_proj && nr == frustum_nr && fr == frustum_fr && w == frustum_w && h == frustum_h) return;
++	frustum_nr = nr; frustum_fr = fr; frustum_w = w; frustum_h = h; ortho_proj = true; off_axis_proj = false;
++	projmatrix._31 = projmatrix._32 = 0;
+ 	float W = 2 / w;
+ 	float H = 2 / h;
+ 	float Q = 1 / (fr - nr);
+@@ -526,8 +527,9 @@ void gxScene::setOrthoProj(float nr, float fr, float w, float h) {
+ }
+ 
+ void gxScene::setPerspProj(float nr, float fr, float w, float h) {
+-	if(!ortho_proj && nr == frustum_nr && fr == frustum_fr && w == frustum_w && h == frustum_h) return;
+-	frustum_nr = nr; frustum_fr = fr; frustum_w = w; frustum_h = h; ortho_proj = false;
++	if(!ortho_proj && !off_axis_proj && nr == frustum_nr && fr == frustum_fr && w == frustum_w && h == frustum_h) return;
++	frustum_nr = nr; frustum_fr = fr; frustum_w = w; frustum_h = h; ortho_proj = false; off_axis_proj = false;
++	projmatrix._31 = projmatrix._32 = 0;
+ 	float W = 2 * nr / w;
+ 	float H = 2 * nr / h;
+ 	float Q = fr / (fr - nr);
+@@ -541,6 +543,24 @@ void gxScene::setPerspProj(float nr, float fr, float w, float h) {
+ 	dir3dDev->SetTransform(D3DTS_PROJECTION, &projmatrix);
+ }
+ 
++// VR: left-handed off-center perspective (same layout as D3DXMatrixPerspectiveOffCenterLH).
++// l, r, b, t are the near-plane extents at distance nr.
++void gxScene::setPerspProjOffAxis(float nr, float fr, float l, float r, float b, float t) {
++	frustum_nr = nr; frustum_fr = fr; frustum_w = r - l; frustum_h = t - b;
++	ortho_proj = false; off_axis_proj = true;
++	float Q = fr / (fr - nr);
++	projmatrix._11 = 2 * nr / (r - l);
++	projmatrix._22 = 2 * nr / (t - b);
++	projmatrix._31 = (l + r) / (l - r);
++	projmatrix._32 = (t + b) / (b - t);
++	projmatrix._33 = Q;
++	projmatrix._34 = 1;
++	projmatrix._43 = -Q * nr;
++	projmatrix._44 = 0;
++	currentProj = projmatrix;
++	dir3dDev->SetTransform(D3DTS_PROJECTION, &projmatrix);
++}
++
+ void gxScene::setFogColor(const float rgb[3]) {
+ 	int n = (int(rgb[0] * 255.0f) << 16) | (int(rgb[1] * 255.0f) << 8) | int(rgb[2] * 255.0f);
+ 	if(n == fogcolor) return;
+@@ -825,9 +845,13 @@ bool gxScene::begin(const std::vector<gxLight*>& lights) {
+ 	}
+ 	setLights();
+ 
+-	IDirect3DSurface9* depthSurf = depthTarget ? depthTarget->z_surf : target->z_surf;
++	activeTarget = target;
++	if (rtOverride && rtOverride->surf) {
++		if (rtOverride->z_surf || rtOverride->attachZBuffer()) activeTarget = rtOverride;
++	}
++	IDirect3DSurface9* depthSurf = (depthTarget && activeTarget == target) ? depthTarget->z_surf : activeTarget->z_surf;
+ 	if (depthSurf) {
+-		dir3dDev->SetRenderTarget(0, target->surf);
++		dir3dDev->SetRenderTarget(0, activeTarget->surf);
+ 		dir3dDev->SetDepthStencilSurface(depthSurf);
+ 	}
+ 
+@@ -1017,7 +1041,16 @@ void gxScene::end() {
+ 	lastRenderStateValid = false;
+ 	dir3dDev->EndScene();
+ 	RECT r = { (LONG)viewport.X, (LONG)viewport.Y, (LONG)(viewport.X + viewport.Width), (LONG)(viewport.Y + viewport.Height) };
+-	target->damage(r);
++	if (activeTarget && activeTarget != target) {
++		activeTarget->damage(r);
++		// put the back buffer back so 2D drawing keeps working as before
++		dir3dDev->SetRenderTarget(0, target->surf);
++		if (target->z_surf) dir3dDev->SetDepthStencilSurface(target->z_surf);
++	}
++	else {
++		target->damage(r);
++	}
++	activeTarget = nullptr;
+ }
+ 
+ gxLight* gxScene::createLight(int flags) {
+diff --git a/gxruntime/gxscene.h b/gxruntime/gxscene.h
+index 14f9928..abe311d 100644
+--- a/gxruntime/gxscene.h
++++ b/gxruntime/gxscene.h
+@@ -104,6 +104,10 @@ public:
+ 	void setViewport(int x, int y, int w, int h);
+ 	void setOrthoProj(float nr, float fr, float nr_w, float nr_h);
+ 	void setPerspProj(float nr, float fr, float nr_w, float nr_h);
++	void setPerspProjOffAxis(float nr, float fr, float l, float r, float b, float t);
++	// VR: make RenderWorld draw into this render-target canvas instead of the back buffer (nullptr = back buffer)
++	void setRenderTargetOverride(gxCanvas* c) { rtOverride = c; }
++	gxCanvas* getRenderTargetOverride() const { return rtOverride; }
+ 	void setViewMatrix(const Matrix* matrix);
+ 	void setWorldMatrix(const Matrix* matrix);
+ 	void setEyePosition(const float pos[3]);
+@@ -142,6 +146,9 @@ public:
+ private:
+ 	gxCanvas* target;
+ 	gxCanvas* depthTarget = nullptr;
++	gxCanvas* rtOverride = nullptr;
++	gxCanvas* activeTarget = nullptr;
++	bool off_axis_proj = false;
+ 	bool wbuffer, dither, antialias, wireframe, flipped;
+ 	unsigned ambient, ambient2, fogcolor;
+ 	int caps_level, fogmode, zmode, max_lights;
+-- 
+2.56.0.windows.1
+
+
+From 150bd5100df6f675cf7211f2d1fdd58ac7d79173 Mon Sep 17 00:00:00 2001
+From: "Aiden (local)" <local@localhost>
+Date: Wed, 18 Nov 2026 12:29:23 -0500
+Subject: [PATCH 2/5] Show runtime errors in release builds instead of exiting
+ silently
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ bbruntime_dll/bbruntime_dll.cpp | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/bbruntime_dll/bbruntime_dll.cpp b/bbruntime_dll/bbruntime_dll.cpp
+index 909cbfa..ba195d0 100644
+--- a/bbruntime_dll/bbruntime_dll.cpp
++++ b/bbruntime_dll/bbruntime_dll.cpp
+@@ -385,7 +385,13 @@ void Runtime::execute(void (*pc)(), const char* args, Debugger* dbg) {
+ 	SetProcessDPIAware();
+ 
+ 	if(gx_runtime = gxRuntime::openRuntime(hinst, params, dbg)) {
+-		bbruntime_run(gx_runtime, pc, debug);
++		const char* err = bbruntime_run(gx_runtime, pc, debug);
++
++		// Release builds used to drop runtime errors and just close. Show and log them instead.
++		if(err && err[0] && !debug) {
++			if(FILE* f = fopen("runtime_error.txt", "a")) { fprintf(f, "%s\n", err); fclose(f); }
++			MessageBoxA(gx_runtime->hwnd, err, "Runtime Error", MB_OK | MB_ICONERROR | MB_APPLMODAL);
++		}
+ 
+ 		gxRuntime* t = gx_runtime;
+ 		gx_runtime = 0;
+-- 
+2.56.0.windows.1
+
+
+From fdd8ba7665eda4489916aa7f6b5d5d95f1928257 Mon Sep 17 00:00:00 2001
+From: "Aiden (local)" <local@localhost>
+Date: Wed, 18 Nov 2026 12:37:45 -0500
+Subject: [PATCH 3/5] Don't let path helpers throw on names that are invalid in
+ the ANSI code page
+
+filenamefile/filenamepath/fullfilename, FileSize and AbsolutePath used std::filesystem::path on narrow strings. On a PC with a non-Western system locale (here Japanese, cp932) a texture path stored in a model (GFX\npcs\guard.b3d has a cp1251 path) throws std::system_error, which ended the program silently on level load.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ bbruntime/bbfilesystem.cpp |  5 ++++-
+ gxruntime/gxfilesystem.cpp |  6 ++++-
+ stdutil/stdutil.cpp        | 45 ++++++++++++++++++++++++--------------
+ 3 files changed, 38 insertions(+), 18 deletions(-)
+
+diff --git a/bbruntime/bbfilesystem.cpp b/bbruntime/bbfilesystem.cpp
+index 73f69a7..9474d26 100644
+--- a/bbruntime/bbfilesystem.cpp
++++ b/bbruntime/bbfilesystem.cpp
+@@ -233,7 +233,10 @@ void bbUnzip(BBStr* src, BBStr* dst, BBStr* password) {
+ BBStr* bbAbsolutePath(BBStr* path) {
+ 	std::string file = path->c_str();
+ 	delete path;
+-	return new BBStr(std::filesystem::absolute(file).generic_string());
++	// GetFullPathNameA instead of std::filesystem, which throws on names that are invalid in the ANSI code page
++	std::string full = fullfilename(file);
++	for (char& c : full) if (c == '\\') c = '/';
++	return new BBStr(full);
+ }
+ 
+ bool filesystem_create() {
+diff --git a/gxruntime/gxfilesystem.cpp b/gxruntime/gxfilesystem.cpp
+index 914f655..7561b0f 100644
+--- a/gxruntime/gxfilesystem.cpp
++++ b/gxruntime/gxfilesystem.cpp
+@@ -62,7 +62,11 @@ std::string gxFileSystem::getCurrentDir()const {
+ }
+ 
+ int gxFileSystem::getFileSize(const std::string& name)const {
+-	return std::filesystem::exists(name) ? std::filesystem::file_size(name) : 0;
++	// GetFileAttributesExA instead of std::filesystem, which throws on names that are invalid in the ANSI code page
++	WIN32_FILE_ATTRIBUTE_DATA fad;
++	if (!GetFileAttributesExA(name.c_str(), GetFileExInfoStandard, &fad)) return 0;
++	if (fad.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) return 0;
++	return (int)fad.nFileSizeLow;
+ }
+ 
+ int gxFileSystem::getFileType(const std::string& name)const {
+diff --git a/stdutil/stdutil.cpp b/stdutil/stdutil.cpp
+index e9f6c11..1356cdd 100644
+--- a/stdutil/stdutil.cpp
++++ b/stdutil/stdutil.cpp
+@@ -222,31 +222,44 @@ std::string toupper(const std::string& s) {
+ 	return t;
+ }
+ 
++// These work on the raw bytes instead of std::filesystem::path. fs::path converts narrow strings
++// through the Windows ANSI code page and throws std::system_error ("No mapping for the Unicode
++// character exists in the target multi-byte code page") when a name has bytes that are invalid in
++// that code page, e.g. a cp1251 texture path stored inside a .b3d on a PC whose system locale is
++// Japanese (cp932). That exception escaped to the runtime and ended the program.
++
+ std::string fullfilename(const std::string& t) {
+-	try {
+-		return fs::absolute(fs::path(t)).string();
+-	}
+-	catch (const fs::filesystem_error&) {
+-		return t;
+-	}
++	char buf[MAX_PATH * 4];
++	DWORD n = GetFullPathNameA(t.c_str(), sizeof(buf), buf, nullptr);
++	if (n == 0 || n >= sizeof(buf)) return t;
++	return std::string(buf, n);
++}
++
++static size_t lastSeparator(const std::string& t) {
++	return t.find_last_of("\\/");
+ }
+ 
+ std::string filenamepath(const std::string& t) {
+-	try {
+-		return fs::path(t).parent_path().string();
+-	}
+-	catch (const fs::filesystem_error&) {
+-		return "";
++	size_t n = lastSeparator(t);
++	if (n == std::string::npos) {
++		// "C:file" has a drive but no directory
++		return (t.size() >= 2 && t[1] == ':') ? t.substr(0, 2) : "";
+ 	}
++	// keep the root separator of "C:\file" and "\file", like fs::path::parent_path
++	if (n == 0 || (n == 2 && t[1] == ':')) return t.substr(0, n + 1);
++	// collapse repeated separators ("dir\\\file" -> "dir")
++	size_t e = n;
++	while (e > 0 && (t[e - 1] == '\\' || t[e - 1] == '/')) --e;
++	if (e == 0) return t.substr(0, 1);
++	return t.substr(0, e);
+ }
+ 
+ std::string filenamefile(const std::string& t) {
+-	try {
+-		return fs::path(t).filename().string();
+-	}
+-	catch (const fs::filesystem_error&) {
+-		return "";
++	size_t n = lastSeparator(t);
++	if (n == std::string::npos) {
++		return (t.size() >= 2 && t[1] == ':') ? t.substr(2) : t;
+ 	}
++	return t.substr(n + 1);
+ }
+ 
+ const int MIN_SIZE = 256;
+-- 
+2.56.0.windows.1
+
+
+From 36d48a0b1c6f185de58065b26c3b2a35d402c506 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 18 Nov 2026 19:23:57 +0000
+Subject: [PATCH 4/5] blitzcc: add -icon option to embed a .ico in the
+ generated exe
+
+---
+ blitz/exeicon.inl | 141 ++++++++++++++++++++++++++++++++++++++++++++++
+ blitz/main.cpp    |  15 ++++-
+ 2 files changed, 155 insertions(+), 1 deletion(-)
+ create mode 100644 blitz/exeicon.inl
+
+diff --git a/blitz/exeicon.inl b/blitz/exeicon.inl
+new file mode 100644
+index 0000000..ef567f1
+--- /dev/null
++++ b/blitz/exeicon.inl
+@@ -0,0 +1,141 @@
++// Embeds a .ico file into a built executable (same approach as the IDE publish step).
++// Included by main.cpp so the blitz project needs no new source file.
++#pragma once
++#include <cstring>
++#pragma pack(push, 2)
++typedef struct {
++	WORD idReserved;
++	WORD idType;
++	WORD idCount;
++} ICONDIR;
++
++typedef struct {
++	BYTE bWidth;
++	BYTE bHeight;
++	BYTE bColorCount;
++	BYTE bReserved;
++	WORD wPlanes;
++	WORD wBitCount;
++	DWORD dwBytesInRes;
++	DWORD dwImageOffset;
++} ICONDIRENTRY;
++
++typedef struct {
++	WORD idReserved;
++	WORD idType;
++	WORD idCount;
++} GRPICONDIR;
++
++typedef struct {
++	BYTE  bWidth;
++	BYTE  bHeight;
++	BYTE  bColorCount;
++	BYTE  bReserved;
++	WORD  wPlanes;
++	WORD  wBitCount;
++	DWORD dwBytesInRes;
++	WORD  nID;
++} GRPICONDIRENTRY;
++#pragma pack(pop)
++
++static BOOL CALLBACK EnumLangDeleteCb(HMODULE, LPCSTR aType, LPCSTR aName, LANGID aLang, LONG_PTR aParam) {
++	HANDLE hUpdate = (HANDLE)aParam;
++	UpdateResourceA(hUpdate, aType, aName, aLang, NULL, 0);
++	return TRUE;
++}
++
++static BOOL CALLBACK EnumNameDeleteCb(HMODULE aModule, LPCSTR aType, LPSTR aName, LONG_PTR aParam) {
++	EnumResourceLanguagesA(aModule, aType, aName, EnumLangDeleteCb, aParam);
++	return TRUE;
++}
++
++static void RemoveExistingIcons(HANDLE aUpdate, const std::string& aExePath) {
++	HMODULE hMod = LoadLibraryExA(aExePath.c_str(), NULL, LOAD_LIBRARY_AS_DATAFILE);
++	if (!hMod) return;
++	EnumResourceNamesA(hMod, RT_ICON, EnumNameDeleteCb, (LONG_PTR)aUpdate);
++	EnumResourceNamesA(hMod, RT_GROUP_ICON, EnumNameDeleteCb, (LONG_PTR)aUpdate);
++	FreeLibrary(hMod);
++}
++
++static bool applyIconToExe(const std::string& exePath, const std::string& icoPath) {
++	HANDLE hFile = CreateFileA(icoPath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
++	if (hFile == INVALID_HANDLE_VALUE) return false;
++
++	ICONDIR dir;
++	DWORD bytesRead;
++	if (!ReadFile(hFile, &dir, sizeof(dir), &bytesRead, NULL) || bytesRead != sizeof(dir)) {
++		CloseHandle(hFile);
++		return false;
++	}
++	if (dir.idReserved != 0 || dir.idType != 1 || dir.idCount == 0) {
++		CloseHandle(hFile);
++		return false;
++	}
++
++	std::vector<ICONDIRENTRY> entries(dir.idCount);
++	DWORD entrySize = sizeof(ICONDIRENTRY) * dir.idCount;
++	if (!ReadFile(hFile, entries.data(), entrySize, &bytesRead, NULL) || bytesRead != entrySize) {
++		CloseHandle(hFile);
++		return false;
++	}
++
++	std::vector<std::vector<BYTE>> images(dir.idCount);
++	for (WORD i = 0; i < dir.idCount; ++i) {
++		if (SetFilePointer(hFile, (LONG)entries[i].dwImageOffset, NULL, FILE_BEGIN) == INVALID_SET_FILE_POINTER) {
++			CloseHandle(hFile);
++			return false;
++		}
++		images[i].resize(entries[i].dwBytesInRes);
++		if (!ReadFile(hFile, images[i].data(), entries[i].dwBytesInRes, &bytesRead, NULL) || bytesRead != entries[i].dwBytesInRes) {
++			CloseHandle(hFile);
++			return false;
++		}
++	}
++	CloseHandle(hFile);
++
++	HANDLE hUpdate = BeginUpdateResourceA(exePath.c_str(), FALSE);
++	if (!hUpdate) return false;
++
++	RemoveExistingIcons(hUpdate, exePath);
++
++	const LANGID lang = MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL);
++	bool success = true;
++
++	for (WORD i = 0; i < dir.idCount; ++i) {
++		WORD iconId = i + 1;
++		if (!UpdateResourceA(hUpdate, RT_ICON, MAKEINTRESOURCEA(iconId), lang,
++			images[i].data(), (DWORD)images[i].size())) {
++			success = false;
++		}
++	}
++
++	GRPICONDIR grpDir;
++	grpDir.idReserved = 0;
++	grpDir.idType = 1;
++	grpDir.idCount = dir.idCount;
++
++	std::vector<BYTE> groupData(sizeof(GRPICONDIR) + sizeof(GRPICONDIRENTRY) * dir.idCount);
++	memcpy(groupData.data(), &grpDir, sizeof(GRPICONDIR));
++
++	GRPICONDIRENTRY* grpEntries = (GRPICONDIRENTRY*)(groupData.data() + sizeof(GRPICONDIR));
++	for (WORD i = 0; i < dir.idCount; ++i) {
++		grpEntries[i].bWidth = entries[i].bWidth;
++		grpEntries[i].bHeight = entries[i].bHeight;
++		grpEntries[i].bColorCount = entries[i].bColorCount;
++		grpEntries[i].bReserved = entries[i].bReserved;
++		grpEntries[i].wPlanes = entries[i].wPlanes;
++		grpEntries[i].wBitCount = entries[i].wBitCount;
++		grpEntries[i].dwBytesInRes = entries[i].dwBytesInRes;
++		grpEntries[i].nID = i + 1;
++	}
++
++	if (!UpdateResourceA(hUpdate, RT_GROUP_ICON, MAKEINTRESOURCEA(1), lang,
++		groupData.data(), (DWORD)groupData.size())) {
++		success = false;
++	}
++
++	if (!EndUpdateResourceA(hUpdate, !success)) return false;
++
++
++	return success;
++}
+diff --git a/blitz/main.cpp b/blitz/main.cpp
+index a6e88b6..912bbc2 100644
+--- a/blitz/main.cpp
++++ b/blitz/main.cpp
+@@ -25,6 +25,7 @@
+ #include "../compiler/codegen_llvm/llvm_jit.h"
+ #include "../compiler/codegen_llvm/llvm_obj.h"
+ #include "../bbruntime_dll/bbruntime_dll.h"
++#include "exeicon.inl"
+ 
+ #undef environ
+ 
+@@ -65,6 +66,7 @@ static void showHelp() {
+ 	std::cout << "-llvm : use the experimental LLVM backend" << std::endl;
+ 	std::cout << "-x86       : use the x86 backend instead of the default LLVM backend" << std::endl;
+ 	std::cout << "-o exefile : generate executable" << std::endl;
++	std::cout << "-icon file : embed this .ico file in the generated executable" << std::endl;
+ }
+ 
+ static void err(const std::string& t) {
+@@ -221,7 +223,7 @@ static void versInfo() {
+ }
+ 
+ int _cdecl main(int argc, char* argv[]) {
+-	std::string in_file, out_file, args;
++	std::string in_file, out_file, args, icon_file;
+ 
+ 	bool debug = false, quiet = false, veryquiet = false, compileonly = false;
+ 	bool dumpkeys = false, dumphelp = false, showhelp = false, dumpasm = false;
+@@ -269,6 +271,10 @@ int _cdecl main(int argc, char* argv[]) {
+ 			if (out_file.size() || k == argc - 1) usageErr();
+ 			out_file = argv[++k];
+ 		}
++		else if (t == "-icon") {
++			if (icon_file.size() || k == argc - 1) usageErr();
++			icon_file = argv[++k];
++		}
+ 		else if (t == "-nlaa") {
+ 			nolaa = true;
+ 		}
+@@ -465,6 +471,13 @@ int _cdecl main(int argc, char* argv[]) {
+ 			err("Error creating executable!");
+ 		}
+ 
++		if (icon_file.size()) {
++			if (applyIconToExe(out_file, icon_file)) {
++				if (!veryquiet) std::cout << "Icon \"" << icon_file << "\" embedded." << std::endl;
++			}
++			else std::cout << "Warning: could not embed icon \"" << icon_file << "\"" << std::endl;
++		}
++
+ 		deploySidecarDlls(out_file, quiet, veryquiet);
+ 
+ 		if (!veryquiet) std::cout << "Executable created succesfully." << std::endl;
+-- 
+2.56.0.windows.1
+
+
+From 3a1185bbc398f5c8da9506455d535bb37b2c5b6a Mon Sep 17 00:00:00 2001
+From: "Aiden (local)" <local@localhost>
+Date: Wed, 18 Nov 2026 16:30:10 -0500
+Subject: [PATCH 5/5] Optionally load DXVK's d3d9.dll from a dxvk folder next
+ to the exe
+
+-dxvk on the command line, or BLITZ_D3D9=dxvk in the environment (a program can SetEnv it before its first graphics command), makes the runtime create its Direct3D 9 object from dxvk\d3d9.dll. Without either, or if that DLL can't be loaded, the system Direct3D 9 is used as before.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gxruntime/gxruntime.cpp | 44 ++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 43 insertions(+), 1 deletion(-)
+
+diff --git a/gxruntime/gxruntime.cpp b/gxruntime/gxruntime.cpp
+index 2016884..6ef49d8 100644
+--- a/gxruntime/gxruntime.cpp
++++ b/gxruntime/gxruntime.cpp
+@@ -1312,9 +1312,51 @@ void gxRuntime::closeFileSystem(gxFileSystem* f) {
+ ////////////////////
+ // GFX ENUM STUFF //
+ ////////////////////
++// DXVK (Direct3D 9 on Vulkan) instead of the system Direct3D 9: "-dxvk" on the command line, or the
++// BLITZ_D3D9 environment variable set to "dxvk" (a program can SetEnv it before its first graphics
++// command). DXVK's d3d9.dll is loaded from a "dxvk" folder next to the exe, so the system Direct3D 9
++// stays the default and nothing changes unless it is asked for.
++static bool wantDXVK() {
++	char env[16] = "";
++	if (GetEnvironmentVariableA("BLITZ_D3D9", env, sizeof(env)) && !_stricmp(env, "dxvk")) return true;
++	const char* e = getenv("BLITZ_D3D9");
++	if (e && !_stricmp(e, "dxvk")) return true;
++	std::string cmd = GetCommandLineA();
++	for (char& c : cmd) c = (char)tolower((unsigned char)c);
++	size_t p = 0;
++	while ((p = cmd.find("-dxvk", p)) != std::string::npos) {
++		bool startOk = p == 0 || cmd[p - 1] == ' ' || cmd[p - 1] == '\t' || cmd[p - 1] == '"';
++		size_t q = p + 5;
++		bool endOk = q == cmd.size() || cmd[q] == ' ' || cmd[q] == '\t' || cmd[q] == '"';
++		if (startOk && endOk) return true;
++		p = q;
++	}
++	return false;
++}
++
++static HRESULT createD3D9Ex(IDirect3D9Ex** out) {
++	if (wantDXVK()) {
++		char path[MAX_PATH * 2];
++		DWORD n = GetModuleFileNameA(nullptr, path, MAX_PATH);
++		std::string dll = n ? std::string(path, n) : std::string();
++		size_t slash = dll.find_last_of("\\/");
++		dll = (slash == std::string::npos ? std::string() : dll.substr(0, slash + 1)) + "dxvk\\d3d9.dll";
++		HMODULE m = LoadLibraryA(dll.c_str());
++		typedef HRESULT(WINAPI* PFN_Direct3DCreate9Ex)(UINT, IDirect3D9Ex**);
++		PFN_Direct3DCreate9Ex create = m ? (PFN_Direct3DCreate9Ex)GetProcAddress(m, "Direct3DCreate9Ex") : nullptr;
++		if (create && SUCCEEDED(create(D3D_SDK_VERSION, out)) && *out) {
++			OutputDebugStringA(("Direct3D 9: DXVK (" + dll + ")\n").c_str());
++			return S_OK;
++		}
++		OutputDebugStringA(("DXVK was requested but " + dll + " could not be loaded; using the system Direct3D 9\n").c_str());
++		*out = nullptr;
++	}
++	return Direct3DCreate9Ex(D3D_SDK_VERSION, out);
++}
++
+ void gxRuntime::ensureD3D() {
+ 	if (d3d) return;
+-	if (FAILED(Direct3DCreate9Ex(D3D_SDK_VERSION, &d3d))) {
++	if (FAILED(createD3D9Ex(&d3d))) {
+ 		d3d = nullptr;
+ 		debugLog("Direct3D9 not available");
+ 	}
+-- 
+2.56.0.windows.1
+

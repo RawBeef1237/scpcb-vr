@@ -7257,6 +7257,7 @@ Function UpdateEvents()
 						ShouldPlay = 22
 					EndIf
 					
+					Local vr914HandIcon% = DrawHandIcon, vr914Arrow1% = DrawArrowIcon(1), vr914Arrow3% = DrawArrowIcon(3) ; (VR: see VR_After914 below)
 					EntityPick(Camera, 1.0)
 					If PickedEntity() = e\room\Objects[0] Then
 						DrawHandIcon = True
@@ -7266,7 +7267,8 @@ Function UpdateEvents()
 						If MouseHit1 Then GrabbedEntity = e\room\Objects[1]
 					EndIf
 					
-					If MouseDown1 Or MouseHit1 Then
+					VR_Update914(e\room\Objects[0], e\room\Objects[1], e\EventState) ; VR: hands can turn the key and knob (VR.bb)
+					If MouseDown1 Or MouseHit1 Or VR914Held Then
 						If GrabbedEntity <> 0 Then ;avain
 							If GrabbedEntity = e\room\Objects[0] Then
 								If e\EventState = 0 Then
@@ -7321,6 +7323,8 @@ Function UpdateEvents()
 					Else
 						GrabbedEntity = 0
 					End If
+					VR_After914(e\room\Objects[0], e\room\Objects[1], e\EventState)
+					If VR_GrabHidesIcons() Then DrawHandIcon = vr914HandIcon : DrawArrowIcon(1) = vr914Arrow1 : DrawArrowIcon(3) = vr914Arrow3 ; hands grab the key and knob
 					
 					Local setting$ = ""
 					

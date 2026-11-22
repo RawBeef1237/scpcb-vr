@@ -1537,10 +1537,18 @@ Function UpdateDoors()
 			EndIf
 		EndIf
 	Next
+	VR_UpdateHeldItem() ; VR: keycards / severed hands held in the hand, touched to readers (VR.bb)
 End Function
 
 Global ElevatorButtonLastPressMillis%
 Global ElevatorButtonSpamCount%
+
+; VR: the keycard / severed hand is held in the hand and the button being looked at is a keycard reader or hand scanner
+Function VR_HeldAtReader%()
+	If VRHeldModel = 0 Then Return False
+	If ClosestDoor = Null Then Return False ; (Blitz doesn't short-circuit And, so check separately)
+	Return ClosestDoor\KeyCard <> 0
+End Function
 
 Function UseDoor(d.Doors, showmsg%=True, playsfx%=True)
 	Local temp% = 0
@@ -4205,7 +4213,8 @@ Function DrawGUI()
 	EndIf
 	
 	
-	If ClosestButton <> 0 And (Not IsPaused()) Then
+	; (VR: no hand icon on keycard readers / hand scanners while the keycard or severed hand is in your hand)
+	If ClosestButton <> 0 And (Not IsPaused()) And (Not VR_HeldAtReader()) Then
 		If HUDenabled Lor HUDenabledLegacy Then
 			temp% = CreatePivot()
 			PositionEntity temp, EntityX(Camera), EntityY(Camera), EntityZ(Camera)
@@ -4227,6 +4236,8 @@ Function DrawGUI()
 			If ClosestDoor <> Null Then 
 				If ClosestDoor\Code <> "" Then
 					SelectedDoor = ClosestDoor
+				ElseIf VRHeldModel <> 0 And ClosestDoor\KeyCard <> 0 Then
+					; VR: the keycard / severed hand is in your hand: touch it to the reader instead of clicking (VR.bb)
 				ElseIf Playable Then
 					PlaySound2(ButtonSFX, Camera, ClosestButton)
 					UseDoor(ClosestDoor,True)				
@@ -5102,7 +5113,7 @@ Function DrawGUI()
 					;[End Block]
 				Case "key1", "key2", "key3", "key4", "key5", "key6", "keyomni", "scp860", "hand", "hand2", "25ct"
 					;[Block]
-					DrawItemImg(SelectedItem)
+					If VRHeldModel = 0 Then DrawItemImg(SelectedItem) ; (in VR it may be in your hand instead)
 					;[End Block]
 				Case "scp513"
 					;[Block]
@@ -5351,7 +5362,7 @@ Function DrawGUI()
 					
 					If (Not Wearing714) Then SCP1025state[SelectedItem\state]=Max(1,SCP1025state[SelectedItem\state])
 					
-					DrawImage(SelectedItem\itemtemplate\img, GraphicWidth / 2 - ImageWidth(SelectedItem\itemtemplate\img) / 2, GraphicHeight / 2 - ImageHeight(SelectedItem\itemtemplate\img) / 2)
+					If Not VR_DocumentInHand(SelectedItem\itemtemplate\img) Then DrawImage(SelectedItem\itemtemplate\img, GraphicWidth / 2 - ImageWidth(SelectedItem\itemtemplate\img) / 2, GraphicHeight / 2 - ImageHeight(SelectedItem\itemtemplate\img) / 2) ; (VR: the page may be on your left hand)
 					;[End Block]
 				Case "cup"
 					;[Block]
@@ -6301,7 +6312,7 @@ Function DrawGUI()
 						SelectedItem\itemtemplate\img=LoadImage_Strict(SelectedItem\itemtemplate\imgpath, MenuScale)	
 					EndIf
 					
-					DrawImage(SelectedItem\itemtemplate\img, GraphicWidth / 2 - ImageWidth(SelectedItem\itemtemplate\img) / 2, GraphicHeight / 2 - ImageHeight(SelectedItem\itemtemplate\img) / 2)
+					If Not VR_DocumentInHand(SelectedItem\itemtemplate\img) Then DrawImage(SelectedItem\itemtemplate\img, GraphicWidth / 2 - ImageWidth(SelectedItem\itemtemplate\img) / 2, GraphicHeight / 2 - ImageHeight(SelectedItem\itemtemplate\img) / 2) ; (VR: the page may be on your left hand)
 					
 					If SelectedItem\state = 0 Then
 						PlaySound_Strict LoadTempSound("SFX\SCP\1162\NostalgiaCancer"+Rand(6,10)+".ogg")
@@ -6332,7 +6343,7 @@ Function DrawGUI()
 						ScaleImage(SelectedItem\itemtemplate\img, MenuScale, MenuScale)
 					EndIf
 					
-					DrawImage(SelectedItem\itemtemplate\img, GraphicWidth / 2 - ImageWidth(SelectedItem\itemtemplate\img) / 2, GraphicHeight / 2 - ImageHeight(SelectedItem\itemtemplate\img) / 2)
+					If Not VR_DocumentInHand(SelectedItem\itemtemplate\img) Then DrawImage(SelectedItem\itemtemplate\img, GraphicWidth / 2 - ImageWidth(SelectedItem\itemtemplate\img) / 2, GraphicHeight / 2 - ImageHeight(SelectedItem\itemtemplate\img) / 2) ; (VR: the page may be on your left hand)
 					
 					If SelectedItem\state = 0
 						BlurTimer = 1000
@@ -6352,7 +6363,7 @@ Function DrawGUI()
 					Msg = ""
 					
 					SelectedItem\state = 1
-					DrawItemImg(SelectedItem)
+					If VRHeldModel = 0 Then DrawItemImg(SelectedItem) ; (in VR it may be in your hand instead)
 					;[End Block]
 				Case "scp427"
 					;[Block]
@@ -6592,7 +6603,7 @@ Function DrawGUI()
 							End Select
 						EndIf
 						
-						DrawImage(SelectedItem\itemtemplate\img, GraphicWidth / 2 - ImageWidth(SelectedItem\itemtemplate\img) / 2, GraphicHeight / 2 - ImageHeight(SelectedItem\itemtemplate\img) / 2)
+						If Not VR_DocumentInHand(SelectedItem\itemtemplate\img) Then DrawImage(SelectedItem\itemtemplate\img, GraphicWidth / 2 - ImageWidth(SelectedItem\itemtemplate\img) / 2, GraphicHeight / 2 - ImageHeight(SelectedItem\itemtemplate\img) / 2) ; (VR: the page may be on your left hand)
 						;[End Block]
 					Else
 						;[Block]
@@ -6757,43 +6768,52 @@ Function ResetDiseases()
 	EndIf
 End Function
 
+Function DrawHUDMeters()
+	DrawHUDMetersAt(HUDStartX + 80 * HUDScale, HUDEndY - 95 * HUDScale)
+End Function
+
+; x, y = top left of the blink bar (the icons sit 50 * HUDScale to the left of it)
+Function DrawHUDMetersAt(x%, y%)
+	Local width% = 204 * HUDScale
+	Local y0% = y
+
+	DrawBar(BlinkMeterIMG, x, y, width, BlinkTimer / BLINKFREQ)
+	Color 0, 0, 0
+	Rect(x - 50 * HUDScale, y, 30 * HUDScale, 30 * HUDScale)
+	
+	If EyeIrritation > 0 Then
+		Color 200, 0, 0
+		Rect(x - 50 * HUDScale - 3, y - 3, 30 * HUDScale + 6, 30 * HUDScale + 6)
+	End If
+	
+	Color 255, 255, 255
+	Rect(x - 50 * HUDScale - 1, y - 1, 30 * HUDScale + 2, 30 * HUDScale + 2, False)
+	
+	DrawImage BlinkIcon, x - 50 * HUDScale, y
+	
+	y = y0 + 40 * HUDScale
+	DrawBar(StaminaMeterIMG, x, y, width, Stamina / 100.0)
+	
+	Color 0, 0, 0
+	Rect(x - 50 * HUDScale, y, 30 * HUDScale, 30 * HUDScale)
+	
+	Color 255, 255, 255
+	Rect(x - 50 * HUDScale - 1, y - 1, 30 * HUDScale + 2, 30 * HUDScale + 2, False)
+	If Crouch Then
+		DrawImage CrouchIcon, x - 50 * HUDScale, y
+	Else
+		DrawImage SprintIcon, x - 50 * HUDScale, y
+	EndIf
+End Function
+
 Function DrawHUD()
 	If SpeedRunMode Then DrawTimer()
 
 	If ShowMap Then DrawMap()
 
 	If HUDenabled Then
-		Local width% = 204 * HUDScale
-		Local x% = HUDStartX + 80 * HUDScale
-		Local y% = HUDEndY - 95 * HUDScale
-
-		DrawBar(BlinkMeterIMG, x, y, width, BlinkTimer / BLINKFREQ)
-		Color 0, 0, 0
-		Rect(x - 50 * HUDScale, y, 30 * HUDScale, 30 * HUDScale)
-		
-		If EyeIrritation > 0 Then
-			Color 200, 0, 0
-			Rect(x - 50 * HUDScale - 3, y - 3, 30 * HUDScale + 6, 30 * HUDScale + 6)
-		End If
-		
-		Color 255, 255, 255
-		Rect(x - 50 * HUDScale - 1, y - 1, 30 * HUDScale + 2, 30 * HUDScale + 2, False)
-		
-		DrawImage BlinkIcon, x - 50 * HUDScale, y
-		
-		y = HUDEndY - 55 * HUDScale
-		DrawBar(StaminaMeterIMG, x, y, width, Stamina / 100.0)
-		
-		Color 0, 0, 0
-		Rect(x - 50 * HUDScale, y, 30 * HUDScale, 30 * HUDScale)
-		
-		Color 255, 255, 255
-		Rect(x - 50 * HUDScale - 1, y - 1, 30 * HUDScale + 2, 30 * HUDScale + 2, False)
-		If Crouch Then
-			DrawImage CrouchIcon, x - 50 * HUDScale, y
-		Else
-			DrawImage SprintIcon, x - 50 * HUDScale, y
-		EndIf
+		; in VR with the wrist screen up, the meters are on the back of the left hand instead (VR.bb)
+		If VR_WristMetersActive() Then VRWristMetersOnDesktop = True Else DrawHUDMeters()
 	EndIf
 
 	If DebugHUD Then
@@ -8900,6 +8920,7 @@ Function NullGame(playbuttonsfx%=True)
 	CatchErrors("Clear World")
 	; Don't clear shaders
 	ClearWorld(1, 1, 1, 0)
+	VR_ForgetHands()
 	CatchErrors("Uncaught (Clear World)")
 
 	Camera = 0
@@ -11390,7 +11411,7 @@ Function RenderWorld2()
 	
 	CurrTrisAmount = TrisRendered()
 
-	UpdatePostProcess()
+	If Not (VRStereoThisFrame And VRKeyThisFrame) Then UpdatePostProcess() ; (VR pause menu / inventory: keep the 2D layer's key colour exact)
 
 	If hasBattery=0 And WearingNightVision<>3
 		IsNVGBlinking% = True
@@ -11493,10 +11514,14 @@ Function RenderWorld2()
 	EndIf
 	
 	;render sprites
-	CameraProjMode ark_blur_cam,2
-	CameraProjMode Camera,0
-	RenderWorld()
-	CameraProjMode ark_blur_cam,0
+	; (in VR the overlay sprites already went into each eye in VR_RenderEyes; drawn here too they would land in the
+	; 2D layer, where the fog vignette darkened the pause menu / inventory key colour into a black ring)
+	If Not VRStereoThisFrame Then
+		CameraProjMode ark_blur_cam,2
+		CameraProjMode Camera,0
+		RenderWorld()
+		CameraProjMode ark_blur_cam,0
+	EndIf
 	
 	If BlinkTimer < - 16 Or BlinkTimer > - 6
 		If (WearingNightVision=1 Or WearingNightVision=2) And (hasBattery=1) And ((MilliSecs() Mod 800) < 400) Then

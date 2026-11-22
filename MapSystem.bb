@@ -6796,6 +6796,9 @@ Function UpdateMonitorSaving()
 End Function
 
 Function UpdateLever(obj, locked=False)
+	; VR: a hand holding the lever moves it instead of the mouse (VR.bb)
+	If VR_UpdateLeverGrab(obj, locked) Then Return (EntityPitch(obj, True) > 0)
+	Local vrHandIcon% = DrawHandIcon, vrArrow0% = DrawArrowIcon(0), vrArrow2% = DrawArrowIcon(2) ; (VR: see below)
 	
 	Local dist# = EntityDistance(Camera, obj)
 	If dist < 8.0 Then 
@@ -6844,6 +6847,9 @@ Function UpdateLever(obj, locked=False)
 		
 	EndIf
 	
+	; VR with grabbing hands: no hand / arrow icons for levers, the hands grab them
+	If VR_GrabHidesIcons() Then DrawHandIcon = vrHandIcon : DrawArrowIcon(0) = vrArrow0 : DrawArrowIcon(2) = vrArrow2
+
 	If EntityPitch(obj,True) > 0 Then ;p��ll�
 		Return True
 	Else ;pois p��lt�

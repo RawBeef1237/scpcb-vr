@@ -205,11 +205,81 @@ Function VR_Shutdown()
 	VREnabled = False
 End Function
 
+; Slow-frame log (VR_perf.log next to the exe, started fresh each run, at most 400 lines): when a second goes by with a
+; frame over 30 ms, one line says where the time went (ms per frame, average and worst). Also notes every time the pause
+; menu opens or closes and what was pressed. Costs a few MilliSecs() calls per frame.
+Global VRPerfLines% = 0, VRPerfSecond% = 0, VRPerfFrames% = 0, VRPerfMenu% = -1
+Dim VRPerfAt%(5)                                     ; 0 frame start, 1 after the headset wait, 2 eyes start, 3 eyes end, 4 flip start, 5 submitted
+Dim VRPerfSum%(5), VRPerfMax%(5)                     ; 0 whole frame, 1 headset wait, 2 game code, 3 eyes, 4 2D, 5 submit + desktop
+
+Function VR_PerfWrite(s$)
+	If VRPerfLines >= 400 Then Return
+	Local f%
+	If VRPerfLines = 0 Then
+		f = WriteFile("VR_perf.log")
+	Else
+		f = OpenFile("VR_perf.log")
+		If f <> 0 Then SeekFile f, FileSize("VR_perf.log")
+	EndIf
+	If f = 0 Then Return
+	WriteLine f, CurrentTime() + " " + s
+	CloseFile f
+	VRPerfLines = VRPerfLines + 1
+End Function
+
+Function VR_PerfAdd(i%, ms%)
+	If ms < 0 Lor ms > 100000 Then Return
+	VRPerfSum(i) = VRPerfSum(i) + ms
+	If ms > VRPerfMax(i) Then VRPerfMax(i) = ms
+End Function
+
+; start of a frame: account for the one before it
+Function VR_PerfFrame()
+	Local now% = MilliSecs(), i%, s$
+	If VRPerfAt(0) <> 0 Then
+		VR_PerfAdd(0, now - VRPerfAt(0))
+		VR_PerfAdd(1, VRPerfAt(1) - VRPerfAt(0))
+		If VRPerfAt(2) >= VRPerfAt(1) And VRPerfAt(3) >= VRPerfAt(2) Then
+			VR_PerfAdd(2, VRPerfAt(2) - VRPerfAt(1))
+			VR_PerfAdd(3, VRPerfAt(3) - VRPerfAt(2))
+			VR_PerfAdd(4, VRPerfAt(4) - VRPerfAt(3))
+		EndIf
+		VR_PerfAdd(5, VRPerfAt(5) - VRPerfAt(4))
+		VRPerfFrames = VRPerfFrames + 1
+	EndIf
+	VRPerfAt(0) = now
+	If now - VRPerfSecond >= 1000 Then
+		If VRPerfFrames > 0 And VRPerfMax(0) > 30 Then
+			s = "fps " + VRPerfFrames
+			s = s + " | frame " + (VRPerfSum(0) / VRPerfFrames) + "/" + VRPerfMax(0)
+			s = s + " wait " + (VRPerfSum(1) / VRPerfFrames) + "/" + VRPerfMax(1)
+			s = s + " game " + (VRPerfSum(2) / VRPerfFrames) + "/" + VRPerfMax(2)
+			s = s + " eyes " + (VRPerfSum(3) / VRPerfFrames) + "/" + VRPerfMax(3)
+			s = s + " 2d " + (VRPerfSum(4) / VRPerfFrames) + "/" + VRPerfMax(4)
+			s = s + " submit " + (VRPerfSum(5) / VRPerfFrames) + "/" + VRPerfMax(5)
+			s = s + " | menu " + MenuOpen + " inv " + InvOpen + " mainmenu " + MainMenuOpen + " kill " + KillTimer + " tris " + TrisRendered()
+			s = s + " doc " + (VRDocQuad <> 0) + " held " + (VRHeldModel <> 0)
+			If PlayerRoom <> Null Then s = s + " room " + PlayerRoom\RoomTemplate\Name
+			VR_PerfWrite(s)
+		EndIf
+		VRPerfFrames = 0 : VRPerfSecond = now
+		For i = 0 To 5
+			VRPerfSum(i) = 0 : VRPerfMax(i) = 0
+		Next
+	EndIf
+	If MenuOpen <> VRPerfMenu Then
+		VR_PerfWrite("pause menu " + MenuOpen + " (menu button down " + XR_ButtonDown(VRB_MENU) + ", kill timer " + KillTimer + ", ending " + EndingTimer + ")")
+		VRPerfMenu = MenuOpen
+	EndIf
+End Function
+
 ; Top of the main loop. Blocks until the headset wants the next frame.
 Function VR_BeginFrame()
 	VRStereoThisFrame = False
 	If Not VREnabled Then Return
+	VR_PerfFrame()
 	VRShouldRender = XR_BeginFrame()
+	VRPerfAt(1) = MilliSecs()
 	If XR_ExitRequested() Then
 		; the runtime closed our session (headset app quit or removed): carry on as a flat game
 		VR_Shutdown()
@@ -219,6 +289,7 @@ End Function
 ; Replacement for Flip. In VR the headset paces the game, so the desktop never waits for vsync.
 Function VR_Flip(vsync% = True)
 	If VREnabled Then
+		VRPerfAt(4) = MilliSecs()
 		XR_BeginFrame() ; loading screens and menus call Flip without a VR_BeginFrame, this starts their frame
 		If XR_FrameBegun() Then
 			If VRStereoThisFrame Then
@@ -241,6 +312,7 @@ Function VR_Flip(vsync% = True)
 			EndIf
 			VRStereoThisFrame = False
 			Flip False
+			VRPerfAt(5) = MilliSecs()
 			Return
 		EndIf
 	EndIf
@@ -1308,6 +1380,7 @@ End Function
 
 Function VR_RenderEyes%()
 	If Not VR_StereoActive() Then Return False
+	VRPerfAt(2) = MilliSecs()
 
 	; MouseLook placed the camera before the player moved this frame: place it (and the hands, from the same
 	; origin) again from where the collider is now, so neither lags a frame behind while walking
@@ -1367,6 +1440,7 @@ Function VR_RenderEyes%()
 	Cls
 	ClsColor 0, 0, 0
 	VRStereoThisFrame = True
+	VRPerfAt(3) = MilliSecs()
 	Return True
 End Function
 

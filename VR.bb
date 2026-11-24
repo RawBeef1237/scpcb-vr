@@ -1122,14 +1122,20 @@ End Function
 
 Function VR_MakeDocSheet(img%)
 	VR_FreeDocSheet()
-	Local w% = ImageWidth(img), h% = ImageHeight(img)
+	; size of the page's real pixels: ImageWidth/ImageHeight include ScaleImage (the game scales pages by MenuScale)
+	; but the buffer doesn't, and CopyRect doesn't check bounds: copying the scaled size reads past its end and crashes
+	Local buf% = ImageBuffer(img)
+	If buf = 0 Then Return
+	Local w% = BufferWidth(buf), h% = BufferHeight(buf)
 	If w <= 0 Lor h <= 0 Then Return
 	Local tw% = 64, th% = 64
 	While tw < w : tw = tw * 2 : Wend
 	While th < h : th = th * 2 : Wend
 	VRDocTex = CreateTexture(tw, th, 1)
 	If VRDocTex = 0 Then Return
-	CopyRect 0, 0, w, h, 0, 0, ImageBuffer(img), TextureBuffer(VRDocTex)
+	; (the texture can come out smaller than asked for if the graphics card limits it)
+	w = Min(w, TextureWidth(VRDocTex)) : h = Min(h, TextureHeight(VRDocTex))
+	CopyRect 0, 0, w, h, 0, 0, buf, TextureBuffer(VRDocTex)
 	Local u1# = Float(w) / TextureWidth(VRDocTex), v1# = Float(h) / TextureHeight(VRDocTex)
 
 	; grip space of the left hand: the palm faces +X, the thumb side of the fist is +Z (forward), the fingers -Y.
@@ -1155,7 +1161,12 @@ End Function
 ; every rendered frame (VR_UpdateHands): show the sheet only while DrawGUI keeps asking for it
 Function VR_UpdateDocSheet()
 	If VRDocQuad = 0 Then Return
-	If VRDocWanted And XR_GripValid(0) Then ShowEntity VRDocQuad Else HideEntity VRDocQuad
+	If VRDocWanted Then
+		If XR_GripValid(0) Then ShowEntity VRDocQuad Else HideEntity VRDocQuad
+	Else
+		; put away: free our copy, so a page the game loads later (maybe at the same address) is never confused with it
+		VR_FreeDocSheet()
+	EndIf
 	VRDocWanted = False
 End Function
 

@@ -105,6 +105,7 @@ Dim VRHandMesh%(1)                 ; the animated mesh, scaled to Blitz units, c
 Dim VRHandBone%(1, 14)             ; [hand, finger * 3 + joint]: fingers Thumb Index Middle Ring Pinky, joints 1-3
 Dim VRHandBoneP#(1, 14), VRHandBoneY#(1, 14), VRHandBoneR#(1, 14) ; rest (bind) rotation of each bone
 Dim VRHandCurl#(1, 1)              ; smoothed [hand, 0 = grip / 1 = trigger] 0..1
+Dim VRHold#(2, 5)                  ; held document / keycard / severed hand adjustments, see VR_ApplyHold
 Dim VRHandTouch#(1, 1)             ; smoothed capacitive touch [hand, 0 = index on trigger / 1 = thumb on controls] 0..1
 ; physical grabbing (see the grabbing section)
 Dim VRGrabObj%(1)               ; entity each hand holds (0 = nothing)
@@ -155,6 +156,20 @@ Function VR_Init()
 	If GetOptionString("vr", "physical keycards") <> "" Then VRPhysicalKeycards = GetOptionInt("vr", "physical keycards")
 	If GetOptionString("vr", "held item flip") <> "" Then VRHeldFlip = GetOptionInt("vr", "held item flip")
 	If GetOptionString("vr", "documents in hand") <> "" Then VRDocsInHand = GetOptionInt("vr", "documents in hand")
+	Local i2%, what$
+	For i2 = 0 To 2
+		If i2 = 0 Then what = "document"
+		If i2 = 1 Then what = "held keycard"
+		If i2 = 2 Then what = "held hand"
+		VRHold(i2, 0) = GetOptionFloat("vr", what + " offset x")
+		VRHold(i2, 1) = GetOptionFloat("vr", what + " offset y")
+		VRHold(i2, 2) = GetOptionFloat("vr", what + " offset z")
+		VRHold(i2, 3) = GetOptionFloat("vr", what + " pitch")
+		VRHold(i2, 4) = GetOptionFloat("vr", what + " yaw")
+		VRHold(i2, 5) = GetOptionFloat("vr", what + " roll")
+	Next
+	f = GetOptionFloat("vr", "held hand scale") : If f > 0.0 Then VRHeldHandScale = f
+	f = GetOptionFloat("vr", "held keycard scale") : If f > 0.0 Then VRHeldCardScale = f
 	f = GetOptionFloat("vr", "document size") : If f > 0.0 Then VRDocSize = f
 	If GetOptionString("vr", "hand curl sign") <> "" Then VRHandCurlSign = GetOptionFloat("vr", "hand curl sign")
 	If GetOptionString("vr", "hand index touch curl") <> "" Then VRHandIndexTouchCurl = GetOptionFloat("vr", "hand index touch curl")
@@ -433,7 +448,7 @@ Function VR_ForgetHands()
 	VRWristPivot = 0 : VRWristQuad = 0 : VRWristTex = 0 : VRWristShown = False : VRWristKey = -1
 	VRGrabObj(0) = 0 : VRGrabObj(1) = 0 : VR914Held = False
 	VRHeldPivot = 0 : VRHeldModel = 0 : VRHeldSrc = 0 : VRHeldLastButton = 0 ; (freed by ClearWorld)
-	VRDocQuad = 0 : VRDocTex = 0 : VRDocImg = 0 : VRDocWanted = False
+	VRDocQuad = 0 : VRDocTex = 0 : VRDocPivot = 0 : VRDocImg = 0 : VRDocWanted = False
 	For h = 0 To 1
 		VRHandGrip(h) = 0 : VRHandRot(h) = 0 : VRHandMesh(h) = 0
 		For b = 0 To 14 : VRHandBone(h, b) = 0 : Next
@@ -713,7 +728,8 @@ Function VR_UpdateHands()
 						Default ; middle, ring, pinky: grip
 							c = VRHandRestCurl + (1.0 - VRHandRestCurl) * VRHandCurl(h, 0)
 					End Select
-					If h = 1 And VRHeldModel <> 0 Then c = Max(c, 0.75) ; holding a keycard / severed hand
+					If h = 1 And VRHeldModel <> 0 Then c = VRHeldCurl ; holding a keycard / severed hand
+					If h = 0 And VRDocQuad <> 0 Then c = 0.35 ; holding a document
 					For j = 0 To 2
 						b = f * 3 + j
 						If VRHandBone(h, b) <> 0 Then
@@ -971,11 +987,38 @@ Function VR_DropHeld()
 	VRHeldPivot = 0 : VRHeldModel = 0 : VRHeldSrc = 0 : VRHeldLastButton = 0
 End Function
 
-; copy the item's world model into the right hand, its longest side pointing forward out of the fist (grip +Z) and
-; its thinnest side across the palm (grip X), so a card is held upright between thumb and fingers
-Function VR_MakeHeld(src%)
+; "held keycard scale": size of a held keycard compared with the dropped one. A held severed hand is made as long as
+; the VR hand models (0.244 m).
+Global VRHeldCurl# = 0.45 ; finger curl around the held item (set per item)
+Global VRHeldCardScale# = 0.75
+Global VRHeldHandScale# = 1.0
+Const VR_HELD_HAND_LENGTH# = 0.244
+
+; A pivot in hand h that follows the user's hand adjustments (offset, tilt, pitch...) like the hand model does. Axes as
+; seen in the headset: origin = middle of the palm skin, -Y = where the fingers point, +Z = thumb side,
+; +X = out of the left palm / out of the back of the right hand.
+Function VR_CreateHandPivot%(h%)
+	Local p% = CreatePivot(VRHandGrip(h)), m# = 1.0, s# = VRWorldScale
+	If h = 1 Then m = -1.0
+	PositionEntity p, VRHandOffX * m * s, VRHandOffY * s, VRHandOffZ * s
+	RotateEntity p, VRHandTilt, 0, 0
+	TurnEntity p, VRHandPitch, VRHandYaw * m, VRHandRoll * m
+	Return p
+End Function
+
+; adjustments from [vr] on top of the built-in pose: 0 document, 1 keycard, 2 severed hand; x y z (metres) pitch yaw roll
+Function VR_ApplyHold(pivot%, what%)
+	Local s# = VRWorldScale
+	MoveEntity pivot, VRHold(what, 0) * s, VRHold(what, 1) * s, VRHold(what, 2) * s
+	TurnEntity pivot, VRHold(what, 3), VRHold(what, 4), VRHold(what, 5)
+End Function
+
+; copy the item's world model into the right hand; kind 1 = keycard, 2 = severed hand. VRHeldPivot's +Z is the
+; direction of the item's longest side (front end), its X the thinnest side.
+Function VR_MakeHeld(src%, kind%)
 	VRHeldSrc = src
-	VRHeldPivot = CreatePivot(VRHandGrip(1))
+	If kind = 2 Then VRHeldCurl = 0.75 Else VRHeldCurl = 0.45
+	VRHeldPivot = VR_CreateHandPivot(1)
 	VRHeldModel = CopyEntity(src, VRHeldPivot)
 	ShowEntity VRHeldModel
 	EntityPickMode VRHeldModel, 0
@@ -1008,17 +1051,30 @@ Function VR_MakeHeld(src%)
 	If ey < ex And ey <= ez Then thinAxis = 2
 	If ez < ex And ez < ey Then thinAxis = 3
 	If thinAxis = longAxis Then thinAxis = (longAxis Mod 3) + 1
+	Local k# = VRHeldCardScale
+	If kind = 2 Then k = VRHeldHandScale * VR_HELD_HAND_LENGTH * VRWorldScale / Max(Max(ex, ey), Max(ez, 0.0001))
+	ScaleEntity VRHeldModel, EntityScaleX(VRHeldModel) * k, EntityScaleY(VRHeldModel) * k, EntityScaleZ(VRHeldModel) * k
+	ex = ex * k : ey = ey * k : ez = ez * k
 	Select longAxis
 		Case 1 : VRHeldHalf = ex * 0.5
 		Case 2 : VRHeldHalf = ey * 0.5
 		Default : VRHeldHalf = ez * 0.5
 	End Select
 
-	; hold point in grip space (right hand: the palm faces -X, the thumb side of the fist is +Z): between thumb and
-	; index finger. The item's centre sits a bit less than half its length further forward.
+	; hold point, then turn the pivot so its +Z is where the item's front end goes. The item's back end sits a little
+	; behind the hold point.
 	Local m# = VRWorldScale
-	PositionEntity VRHeldPivot, -0.02 * m, 0.0, 0.03 * m
-	RotateEntity VRHeldPivot, 0, 0, 0
+	If kind = 2 Then
+		; severed hand: the stump in the fist, fingers out of the thumb side (up), palm forward
+		MoveEntity VRHeldPivot, -0.025 * m, -0.03 * m, -0.01 * m
+		TurnEntity VRHeldPivot, 0, 0, 90
+	Else
+		; keycard: pinched flat between thumb (on top) and index finger, chip end forward, printed side up
+		MoveEntity VRHeldPivot, -0.03 * m, -0.07 * m, 0.035 * m
+		TurnEntity VRHeldPivot, 90, 0, 0
+		TurnEntity VRHeldPivot, 0, 0, 90
+	EndIf
+	VR_ApplyHold(VRHeldPivot, kind)
 
 	Local f# = 1.0
 	If VRHeldFlip Then f = -1.0
@@ -1036,15 +1092,16 @@ End Function
 Function VR_UpdateHeldItem()
 	If VRHeldPulseAt <> 0 And MilliSecs() >= VRHeldPulseAt Then XR_Haptic(1, 0.6, 40) : VRHeldPulseAt = 0
 
-	Local want% = 0
+	Local want% = 0, kind% = 0
 	If VREnabled And VRPhysicalKeycards And VRShowHands And VRHandMesh(1) <> 0 And SelectedItem <> Null Then
 		If (Not InvOpen) And OtherOpen = Null And (Not MenuOpen) Then
-			If VR_HeldKind(SelectedItem\itemtemplate\name) <> 0 Then want = SelectedItem\model
+			kind = VR_HeldKind(SelectedItem\itemtemplate\name)
+			If kind <> 0 Then want = SelectedItem\model
 		EndIf
 	EndIf
 	If want <> VRHeldSrc Then
 		VR_DropHeld()
-		If want <> 0 Then VR_MakeHeld(want)
+		If want <> 0 Then VR_MakeHeld(want, kind)
 	EndIf
 	If VRHeldModel = 0 Lor (Not XR_GripValid(1)) Lor (Not Playable) Then Return
 
@@ -1098,7 +1155,8 @@ End Function
 Global VRDocsInHand% = True
 Global VRDocSize# = 1.0             ; "document size": 1 = 29.7 cm tall (A4), width from the page's own shape
 Global VRDocImg% = 0                ; the image the sheet currently shows
-Global VRDocQuad% = 0, VRDocTex% = 0
+Global VRDocQuad% = 0, VRDocTex% = 0, VRDocPivot% = 0
+Global VRDocTilt# = 25.0            ; degrees the top of the page is tilted up toward the thumb side
 Global VRDocWanted% = False         ; DrawGUI asked for the sheet since the last rendered frame
 
 ; Called by DrawGUI where it would draw a selected document full screen. True = the page is on the hand this frame,
@@ -1115,7 +1173,8 @@ Function VR_DocumentInHand%(img%)
 End Function
 
 Function VR_FreeDocSheet()
-	If VRDocQuad <> 0 Then FreeEntity VRDocQuad
+	If VRDocPivot <> 0 Then FreeEntity VRDocPivot ; (and the sheet on it)
+	VRDocPivot = 0
 	If VRDocTex <> 0 Then FreeTexture VRDocTex
 	VRDocQuad = 0 : VRDocTex = 0 : VRDocImg = 0
 End Function
@@ -1138,17 +1197,20 @@ Function VR_MakeDocSheet(img%)
 	CopyRect 0, 0, w, h, 0, 0, buf, TextureBuffer(VRDocTex)
 	Local u1# = Float(w) / TextureWidth(VRDocTex), v1# = Float(h) / TextureHeight(VRDocTex)
 
-	; grip space of the left hand: the palm faces +X, the thumb side of the fist is +Z (forward), the fingers -Y.
-	; The sheet faces back toward you (-Z), held by its left edge just in front of the thumb, reaching to the right.
+	; The left hand holds the page's bottom left corner between thumb and fingers: the page reaches to the right (+X, out
+	; of the palm) and up along the fingers (-Y), facing the thumb side (+Z), its top tilted up by VRDocTilt.
 	Local s# = VRWorldScale
 	Local sh# = 0.297 * VRDocSize * s, sw# = sh * w / h
-	Local x0# = 0.01 * s, yb# = -0.06 * s, z# = 0.04 * s
-	VRDocQuad = CreateMesh(VRHandGrip(0))
+	VRDocPivot = VR_CreateHandPivot(0)
+	MoveEntity VRDocPivot, -0.01 * s, -0.035 * s, 0.03 * s
+	TurnEntity VRDocPivot, -VRDocTilt, 0, 0
+	VR_ApplyHold(VRDocPivot, 0)
+	VRDocQuad = CreateMesh(VRDocPivot)
 	Local surf% = CreateSurface(VRDocQuad)
-	AddVertex surf, x0, yb + sh, z, 0, 0       ; top left
-	AddVertex surf, x0 + sw, yb + sh, z, u1, 0 ; top right
-	AddVertex surf, x0 + sw, yb, z, u1, v1     ; bottom right
-	AddVertex surf, x0, yb, z, 0, v1           ; bottom left
+	AddVertex surf, 0, -sh, 0, 0, 0    ; top left
+	AddVertex surf, sw, -sh, 0, u1, 0  ; top right
+	AddVertex surf, sw, 0, 0, u1, v1   ; bottom right
+	AddVertex surf, 0, 0, 0, 0, v1     ; bottom left
 	AddTriangle surf, 0, 1, 2
 	AddTriangle surf, 0, 2, 3
 	EntityTexture VRDocQuad, VRDocTex

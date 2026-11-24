@@ -7069,7 +7069,8 @@ Function UpdateEvents()
 								EndIf
 							EndIf
 							
-							If dist<1.0 Then
+							VR_Update008Lid(e\room\Levers[0]) ; VR: hands can pull the lid shut (VR.bb)
+							If dist<1.0 And (Not VR_GrabHidesIcons()) Then
 								If EntityInView(e\room\Objects[0], Camera) Then
 									DrawHandIcon = True
 									

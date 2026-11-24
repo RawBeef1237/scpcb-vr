@@ -525,6 +525,11 @@ Global VRWristShown% = False         ; the wrist screen is showing this frame, s
 Global VRWristKey% = -1              ; what the texture currently shows, to redraw only on change
 Global VRWristMetersOnDesktop% = False ; DrawHUD left the meters out this frame: draw them on the desktop instead
 
+; a corner of the wrist screen's mesh at texture pixel x, y
+Function VR_WristVertex(surf%, x#, y#, cx#, cy#, cz#, hw#, hh#)
+	AddVertex surf, cx, cy + hw - x / VRWristW * hw * 2.0, cz - hh + y / VRWristH * hh * 2.0, x / TextureWidth(VRWristTex), y / TextureHeight(VRWristTex)
+End Function
+
 Function VR_CreateWristHUD()
 	If BlinkMeterIMG = 0 Lor StaminaMeterIMG = 0 Lor BlinkIcon = 0 Then Return ; HUD images not loaded yet
 
@@ -542,8 +547,6 @@ Function VR_CreateWristHUD()
 	While th < VRWristH : th = th * 2 : Wend
 	VRWristTex = CreateTexture(tw, th, 1) ; managed: cheap to draw into with 2D commands
 	If VRWristTex = 0 Then Return
-	; the part of the texture the meters use (the texture may come out bigger than asked for)
-	Local u1# = Float(VRWristW) / TextureWidth(VRWristTex), v1# = Float(VRWristH) / TextureHeight(VRWristTex)
 
 	VRWristPivot = CreatePivot(VRHandGrip(0))
 	VRWristQuad = CreateMesh(VRWristPivot)
@@ -552,16 +555,38 @@ Function VR_CreateWristHUD()
 	Local hw# = VR_WRIST_W * 0.5 * VRWristSize * s
 	Local hh# = hw * VRWristH / VRWristW
 	Local cx# = (VR_WRIST_X + VRWristOffX) * s, cy# = (VR_WRIST_Y + VRWristOffY) * s, cz# = (VR_WRIST_Z + VRWristOffZ) * s
-	; facing -X (out of the back of the left hand); text right = toward the fingers (-Y), text up = little finger side (-Z)
-	AddVertex surf, cx, cy + hw, cz - hh, 0, 0   ; top left
-	AddVertex surf, cx, cy - hw, cz - hh, u1, 0  ; top right
-	AddVertex surf, cx, cy - hw, cz + hh, u1, v1 ; bottom right
-	AddVertex surf, cx, cy + hw, cz + hh, 0, v1  ; bottom left
-	AddTriangle surf, 0, 1, 2
-	AddTriangle surf, 0, 2, 3
+	; facing -X (out of the back of the left hand); text right = toward the fingers (-Y), text up = little finger side (-Z).
+	; Only the two icons and the two bars get a piece of mesh (cut exactly at their frames), each solid: their black parts
+	; stay black and there is nothing around them.
+	Local bx% = Int(50 * HUDScale) + 4, by% = 4             ; what VR_UpdateWristHUD passes to DrawHUDMetersAt
+	Local ix% = bx - 50 * HUDScale - 1, isz% = 30 * HUDScale + 2
+	Local width% = 204 * HUDScale
+	Local row%, ry%, px%, py%, pw%, ph%, part%, n%
+	For row = 0 To 1
+		ry = by + row * 40 * HUDScale
+		For part = 0 To 1
+			If part = 0 Then
+				px = ix : py = ry - 1 : pw = isz : ph = isz
+			Else
+				px = bx : py = ry
+				If row = 0 Then
+					pw = Int(width / (ImageWidth(BlinkMeterIMG) + 2)) * (ImageWidth(BlinkMeterIMG) + 2) + 3 : ph = ImageHeight(BlinkMeterIMG) + 6
+				Else
+					pw = Int(width / (ImageWidth(StaminaMeterIMG) + 2)) * (ImageWidth(StaminaMeterIMG) + 2) + 3 : ph = ImageHeight(StaminaMeterIMG) + 6
+				EndIf
+			EndIf
+			n = CountVertices(surf)
+			VR_WristVertex(surf, px, py, cx, cy, cz, hw, hh)
+			VR_WristVertex(surf, px + pw, py, cx, cy, cz, hw, hh)
+			VR_WristVertex(surf, px + pw, py + ph, cx, cy, cz, hw, hh)
+			VR_WristVertex(surf, px, py + ph, cx, cy, cz, hw, hh)
+			AddTriangle surf, n, n + 1, n + 2
+			AddTriangle surf, n, n + 2, n + 3
+		Next
+	Next
 	EntityTexture VRWristQuad, VRWristTex
 	EntityFX VRWristQuad, 1 + 8 + 16 ; fullbright, no fog, both sides (so the winding can't hide it)
-	EntityBlend VRWristQuad, 3       ; additive: the black background is see-through
+	EntityBlend VRWristQuad, 1       ; solid
 	EntityPickMode VRWristQuad, 0
 	VRWristKey = -1
 End Function
@@ -875,6 +900,48 @@ Function VR_UpdateLeverGrab%(obj%, locked%)
 	If p < -75 And prev >= -75 Then PlaySound2(LeverSFX, Camera, obj, 1.0) : XR_Haptic(h, 0.8, 40)
 	If (p > 0) <> (prev > 0) Then XR_Haptic(h, 0.5, 15) ; past the middle: the lever's state flips
 	Return True
+End Function
+
+;------------------------------------------------ SCP-008
+
+; Distance from hand h to the 008 container's lid (world units): GFX\map\008_2.b3d is x -60..60, y 0..8, z -120..0 in
+; its own units with the hinge at the origin, so the open lid stands far from its hinge and has to be measured whole.
+Function VR_008LidDistance#(h%, lid%)
+	TFormPoint EntityX(VRHandGrip(h), True), EntityY(VRHandGrip(h), True), EntityZ(VRHandGrip(h), True), 0, lid
+	Local x# = Max(Abs(TFormedX()) - 60.0, 0.0)
+	Local y# = Max(Max(-TFormedY(), TFormedY() - 8.0), 0.0)
+	Local z# = Max(Max(TFormedZ(), -120.0 - TFormedZ()), 0.0)
+	Return Sqr(x * x + y * y + z * z) * EntityScaleX(lid, True)
+End Function
+
+; Called in the 008 event while the container is open. A hand that grabbed the lid turns it around its hinge within
+; the event's own limits (35 to 89); the event itself closes it below 40, as it does for the mouse.
+Function VR_Update008Lid(lid%)
+	If Not VREnabled Then Return
+	Local h% = VR_HandHolding(lid)
+	If h < 0 Then
+		For h = 0 To 1
+			If VR_HandCanGrab(h) Then
+				If VR_008LidDistance(h, lid) <= VRGrabRadius * VRWorldScale Then
+					; (reach is already checked against the whole lid, so no limit on the distance to its hinge)
+					If VR_TryGrab(h, lid, 10.0) Then VRGrabAngle(h) = VR_LeverHandAngle(h, lid) : Exit
+				EndIf
+			EndIf
+		Next
+		If h > 1 Then Return
+	EndIf
+
+	Local a# = VR_LeverHandAngle(h, lid)
+	Local d# = VR_AngleDelta(a, VRGrabAngle(h))
+	VRGrabAngle(h) = a
+	Local prev# = EntityPitch(lid)
+	Local p# = Max(Min(prev + d, 89.0), 35.0)
+	RotateEntity lid, p, EntityYaw(lid), 0
+	If Int(p / 10.0) <> Int(prev / 10.0) Then XR_Haptic(h, 0.3, 12) ; a tick every 10 degrees
+	If EntityPitch(lid, True) < 40 Then ; the event closes it now
+		XR_Haptic(h, 0.8, 60)
+		VR_ReleaseGrab(h)
+	EndIf
 End Function
 
 ;------------------------------------------------ SCP-914

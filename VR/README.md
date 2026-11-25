@@ -77,7 +77,7 @@ In VR the game doesn't pause when its desktop window loses focus. `BlitzXR.log` 
 
 ## Building
 
-1. **Engine.** Clone BlitzX3D (https://github.com/Team-X3D/BlitzX3D), check out commit `6b1a0c4`, apply the patch
+1. **Engine.** Clone BlitzX3D (https://github.com/Team-X3D/BlitzX3D), check out commit `748091b`, apply the patch
    with `git am VR\engine\blitzx3d-vr.patch`, and build it in Visual Studio (Release) as its README describes. The patch
    adds `CameraProjOffAxis`, `SetRenderWorldBuffer`, `GraphicsD3D9Device`, `BufferD3D9Surface`, a `-icon` option for
    `blitzcc`, loading DXVK from a `dxvk` folder, and visible runtime errors in release builds. BlitzX3D does not accept

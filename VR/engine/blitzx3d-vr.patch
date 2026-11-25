@@ -1,4 +1,4 @@
-From 34536527237a139901abc41044bfa8df7a96ca1f Mon Sep 17 00:00:00 2001
+From e81b4448e687f836b0b3e124efd98093ba2cc7f8 Mon Sep 17 00:00:00 2001
 From: Aiden <RawBeef1237@users.noreply.github.com>
 Date: Wed, 18 Nov 2026 16:00:58 +0000
 Subject: [PATCH 1/5] Add VR rendering hooks: off-axis camera projection,
@@ -18,10 +18,10 @@ Claude-Session: https://claude.ai/code/session_013tr8JLrY7n4TkyRbm3YHjk
  8 files changed, 135 insertions(+), 7 deletions(-)
 
 diff --git a/bbruntime/bbblitz3d.cpp b/bbruntime/bbblitz3d.cpp
-index 6d238a4..6372ab9 100644
+index db09ae4..b9990b3 100644
 --- a/bbruntime/bbblitz3d.cpp
 +++ b/bbruntime/bbblitz3d.cpp
-@@ -520,6 +520,9 @@ Texture* bbCreateTexture(int w, int h, int flags, int frames) {
+@@ -525,6 +525,9 @@ Texture* bbCreateTexture(int w, int h, int flags, int frames) {
  void bbFreeTexture(Texture* t) {
  	if (!t) return;
  	debugTexture(t, "FreeTexture");
@@ -31,7 +31,7 @@ index 6d238a4..6372ab9 100644
  	if (texture_set.erase(t)) delete t;
  }
  
-@@ -1226,6 +1229,37 @@ Entity* bbCreateCamera(Entity* p) {
+@@ -1231,6 +1234,37 @@ Entity* bbCreateCamera(Entity* p) {
  	return insertEntity(c, p);
  }
  
@@ -69,7 +69,7 @@ index 6d238a4..6372ab9 100644
  void  bbCameraZoom(Camera* c, float zoom) {
  	debugCamera(c, "CameraZoom");
  	c->setZoom(zoom);
-@@ -2814,6 +2848,8 @@ void blitz3d_link(void (*rtSym)(const char* sym, void* pc)) {
+@@ -2819,6 +2853,8 @@ void blitz3d_link(void (*rtSym)(const char* sym, void* pc)) {
  
  	rtSym("%CreateCamera%parent=0", bbCreateCamera);
  	rtSym("CameraZoom%camera#zoom", bbCameraZoom);
@@ -79,7 +79,7 @@ index 6d238a4..6372ab9 100644
  	rtSym("#GetCameraRangeNear%camera", bbGetCameraRangeNear);
  	rtSym("#GetCameraRangeFar%camera", bbGetCameraRangeFar);
 diff --git a/bbruntime/bbgraphics.cpp b/bbruntime/bbgraphics.cpp
-index e2c5eac..31df64a 100644
+index 135603f..ec8773a 100644
 --- a/bbruntime/bbgraphics.cpp
 +++ b/bbruntime/bbgraphics.cpp
 @@ -976,6 +976,19 @@ gxCanvas* bbBackBuffer()
@@ -102,7 +102,7 @@ index e2c5eac..31df64a 100644
  void bbLockBuffer(gxCanvas* buff)
  {
      if (buff) debugCanvas(buff, "LockBuffer");
-@@ -2561,6 +2574,8 @@ void graphics_link(void (*rtSym)(const char* sym, void* pc))
+@@ -2559,6 +2572,8 @@ void graphics_link(void (*rtSym)(const char* sym, void* pc))
  
      rtSym("%FrontBuffer", bbFrontBuffer);
      rtSym("%BackBuffer", bbBackBuffer);
@@ -330,7 +330,7 @@ index 14f9928..abe311d 100644
 2.56.0.windows.1
 
 
-From 150bd5100df6f675cf7211f2d1fdd58ac7d79173 Mon Sep 17 00:00:00 2001
+From 66d44aa2d8d04b3c8798a6f1674f3e0d324ced92 Mon Sep 17 00:00:00 2001
 From: "Aiden (local)" <local@localhost>
 Date: Wed, 18 Nov 2026 12:29:23 -0500
 Subject: [PATCH 2/5] Show runtime errors in release builds instead of exiting
@@ -364,7 +364,7 @@ index 909cbfa..ba195d0 100644
 2.56.0.windows.1
 
 
-From fdd8ba7665eda4489916aa7f6b5d5d95f1928257 Mon Sep 17 00:00:00 2001
+From fec72f27037c7b1c9946860dedbb9e777a28dd70 Mon Sep 17 00:00:00 2001
 From: "Aiden (local)" <local@localhost>
 Date: Wed, 18 Nov 2026 12:37:45 -0500
 Subject: [PATCH 3/5] Don't let path helpers throw on names that are invalid in
@@ -481,7 +481,7 @@ index e9f6c11..1356cdd 100644
 2.56.0.windows.1
 
 
-From 36d48a0b1c6f185de58065b26c3b2a35d402c506 Mon Sep 17 00:00:00 2001
+From ce12733adf7e503327324f7e054c16bd1707ae24 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 18 Nov 2026 19:23:57 +0000
 Subject: [PATCH 4/5] blitzcc: add -icon option to embed a .ico in the
@@ -698,7 +698,7 @@ index a6e88b6..912bbc2 100644
 2.56.0.windows.1
 
 
-From 3a1185bbc398f5c8da9506455d535bb37b2c5b6a Mon Sep 17 00:00:00 2001
+From 03e1560d76df1e6b95322437244f3ba87593d670 Mon Sep 17 00:00:00 2001
 From: "Aiden (local)" <local@localhost>
 Date: Wed, 18 Nov 2026 16:30:10 -0500
 Subject: [PATCH 5/5] Optionally load DXVK's d3d9.dll from a dxvk folder next
@@ -712,10 +712,10 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  1 file changed, 43 insertions(+), 1 deletion(-)
 
 diff --git a/gxruntime/gxruntime.cpp b/gxruntime/gxruntime.cpp
-index 2016884..6ef49d8 100644
+index 469da76..7a82703 100644
 --- a/gxruntime/gxruntime.cpp
 +++ b/gxruntime/gxruntime.cpp
-@@ -1312,9 +1312,51 @@ void gxRuntime::closeFileSystem(gxFileSystem* f) {
+@@ -1323,9 +1323,51 @@ void gxRuntime::closeFileSystem(gxFileSystem* f) {
  ////////////////////
  // GFX ENUM STUFF //
  ////////////////////

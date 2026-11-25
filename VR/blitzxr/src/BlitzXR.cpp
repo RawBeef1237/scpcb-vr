@@ -1567,6 +1567,14 @@ BXR_API int BXR_CALL XR_Init(int d3d9Device, const char* appName, float resScale
 	bool useVk = false;
 	if (ID3D9VkInteropDevice* probe = queryInterop((IDirect3DDevice9*)(intptr_t)d3d9Device)) { useVk = true; probe->Release(); }
 	logf("graphics path: %s", useVk ? "DXVK Vulkan" : "D3D11 bridge");
+	{
+		// which Direct3D 9 the game runs on (the DLL the device's code is in), and whether DXVK was asked for
+		HMODULE mod = nullptr;
+		char dll[MAX_PATH] = "?";
+		if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, *(LPCSTR*)(intptr_t)d3d9Device, &mod))
+			GetModuleFileNameA(mod, dll, sizeof(dll));
+		logf("Direct3D 9: %s (-dxvk on the command line: %s)", dll, strstr(GetCommandLineA(), "-dxvk") ? "yes" : "no");
+	}
 	const char* gfxExt = useVk ? XR_KHR_VULKAN_ENABLE_EXTENSION_NAME : XR_KHR_D3D11_ENABLE_EXTENSION_NAME;
 
 	// --- instance

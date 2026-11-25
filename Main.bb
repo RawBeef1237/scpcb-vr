@@ -99,6 +99,20 @@ Include "Blitz_File_FileName.bb"
 
 Include "DevilParticleSystem.bb"
 
+; VR renderer: "dxvk" (renderer in [vr]) runs the game on DXVK, Direct3D 9 on Vulkan, from dxvk\d3d9.dll, and VR then goes
+; through Vulkan instead of the default D3D11 bridge. The engine picks its Direct3D when it starts, before any of this
+; code runs, so the game starts itself again with -dxvk (once: the new one has the flag). -nodxvk turns it off.
+Function RestartWithDXVK()
+	If HasCLIFlag("dxvk") Lor HasCLIFlag("nodxvk") Then Return
+	If Lower(Trim(GetOptionString("vr", "renderer"))) <> "dxvk" Then Return
+	If FileType("dxvk\d3d9.dll") <> 1 Then Return
+	Local exe$ = SystemProperty("appfile")
+	If exe = "" Lor Lower(Right(exe, 11)) = "blitzcc.exe" Then Return ; running from the compiler / debugger
+	ExecFile Chr(34) + exe + Chr(34) + " " + Trim(CommandLine() + " -dxvk")
+	End
+End Function
+RestartWithDXVK() ; (before Steam and Discord start)
+
 Global SteamLastStatus%
 Global SteamActive% = GetOptionInt("general", "enable steam") And (Not HasCLIFlag("nosteam"))
 Global SteamRichPresenceActive% = SteamActive And GetOptionInt("general", "enable steam rich presence") And (Not HasCLIFlag("nosteamrp"))
@@ -213,12 +227,6 @@ For m.ActiveMods = Each ActiveMods
 	If FileType(modPath) = 1 Then LoadLocalization(I_Loc, modPath)
 Next
 LoadLocalization(I_Loc, StringsFile)
-
-; VR renderer: "dxvk" (or -dxvk) runs the game on DXVK, Direct3D 9 on Vulkan, from dxvk\d3d9.dll, and VR then
-; goes through Vulkan instead of the default D3D11 bridge. Has to be set before the first graphics command.
-If (Lower(Trim(GetOptionString("vr", "renderer"))) = "dxvk" Lor HasCLIFlag("dxvk")) And (Not HasCLIFlag("nodxvk")) Then
-	SetEnv "BLITZ_D3D9", "dxvk"
-EndIf
 
 ; Exclusive fullscreen ONLY supports the reported resolutions
 If (LauncherEnabled Lor HasCLIFlag("launcher")) And (Not IsRestart) And (Not HasCLIFlag("nolauncher")) Lor Fullscreen And (Not GfxMode3DExists(GraphicWidth, GraphicHeight, 32)) Then

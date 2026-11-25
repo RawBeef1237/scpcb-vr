@@ -8,12 +8,13 @@ BlitzX3D). Tested on Meta Quest through Virtual Desktop. The code was written wi
 - 6DoF stereo rendering with head tracking, through OpenXR (Direct3D 11 bridge, or DXVK/Vulkan)
 - Tracked hands (rigged hand models) with finger curl from grip and trigger, and capacitive touch (point with the
   index finger, thumbs up) on Quest Touch and Index controllers
-- Blink and stamina meters on the back of the left hand
+- Blink and stamina meters on the back of the left hand (solid icons and bars with nothing behind them)
 - HUD floating in front of you; pause menu, inventory, keypads and other screens on a floating panel you use with a
   laser pointer from the controller
 - Real-life crouching crouches in game
-- Physical interaction: grab and pull levers, turn the SCP-914 key and knob, hold keycards and severed hands and touch
-  them to readers and scanners, read documents on a sheet in your hand
+- Physical interaction: grab and pull levers, close the SCP-008 container, turn the SCP-914 key and knob, hold keycards
+  (pinched, chip end forward) and severed hands (by the stump, palm forward) and touch them to readers and scanners,
+  read documents on a sheet held by its bottom left corner
 - Haptics for grabbing, lever and knob clicks, reader access granted / denied
 - Mouse and keyboard keep working alongside the controllers
 
@@ -32,7 +33,7 @@ BlitzX3D). Tested on Meta Quest through Virtual Desktop. The code was written wi
 | Save | Y |
 | Recenter | Hold the Oculus / system button (done by the VR software) |
 | Menus, inventory | Aim a controller at the panel, right trigger clicks |
-| Grab levers, SCP-914 key and knob | Grip, with your palm on the part |
+| Grab levers, the SCP-008 lid, SCP-914 key and knob | Grip, with your palm on the part |
 | Use a keycard / severed hand | Select it in the inventory, then touch it to the reader / scanner |
 | Read a document | Select it in the inventory: it appears in your left hand |
 
@@ -45,7 +46,7 @@ In the `[vr]` section of `defaults.ini` (copy them to `options.ini` to override)
 | Key | Default | What it does |
 |---|---|---|
 | `enabled` | 0 | 1 = start in VR (or launch with `-vr`; `-novr` turns it off) |
-| `renderer` | d3d11 | `dxvk` = run on DXVK (Direct3D 9 on Vulkan, `dxvk\d3d9.dll`), same as `-dxvk` |
+| `renderer` | d3d11 | `dxvk` = run on DXVK (Direct3D 9 on Vulkan, `dxvk\d3d9.dll`): the game starts itself again with `-dxvk`. `-nodxvk` turns it off |
 | `world scale` | 0.55 | Blitz units per real metre (lower = you feel bigger) |
 | `resolution scale` | 1.0 | multiplies the headset's recommended per-eye resolution |
 | `snap turn`, `snap angle`, `smooth turn speed` | 1, 30, 2.5 | turning |
@@ -54,16 +55,21 @@ In the `[vr]` section of `defaults.ini` (copy them to `options.ini` to override)
 | `hand offset x/y/z`, `hand tilt`, `hand pitch/yaw/roll` | 0, 0, -15/0/0 | adjust where the hands sit on the controllers |
 | `hand index touch curl`, `hand thumb touch curl` | 0.3, 0.5 | finger curl when resting on the controls |
 | `wrist hud`, `wrist hud offset x/y/z`, `wrist hud size` | 1, 0, 1.0 | meters on the back of the left hand |
-| `physical grab`, `grab radius` | 1, 0.12 | grab levers and SCP-914 parts (metres) |
+| `physical grab`, `grab radius` | 1, 0.12 | grab levers, the SCP-008 lid and SCP-914 parts (metres) |
 | `physical keycards`, `held item flip` | 1, 0 | keycards / severed hands held in the right hand |
 | `documents in hand`, `document size` | 1, 1.0 | documents on a sheet in the left hand |
+| `held keycard scale`, `held hand scale` | 0.75, 1.0 | size of the held keycard / severed hand |
+| `document` / `held keycard` / `held hand` + ` offset x/y/z`, ` pitch`, ` yaw`, ` roll` | 0 | adjust how each is held (metres, degrees) |
+
+In VR the game doesn't pause when its desktop window loses focus. `BlitzXR.log` says which renderer is in use, and
+`VR_perf.log` where the time goes in slow frames.
 
 ## Files in this fork
 
 - `VR.bb`: the game's VR module; small hooks in `Main.bb`, `MapSystem.bb`, `UpdateEvents.bb`
 - `Userlibs\BlitzXR.decls`, `BlitzXR.dll`, `openxr_loader.dll`: the OpenXR bridge and the Khronos loader (prebuilt, 32-bit)
 - `dxvk\d3d9.dll`: DXVK 3.1.1 (32-bit), used with `renderer = dxvk`; `wineopenxr.dll` (built from `VR\blitzxr\wineopenxr`)
-  tells DXVK which Vulkan extensions OpenXR needs
+  tells DXVK which Vulkan extensions OpenXR needs. Keep it next to the exe: without it VR can't use DXVK
 - `GFX\VR\`: hand models and texture; `GFX\shaders\VRHudKey.fx`: desktop HUD shader
 - `VR\blitzxr\`: source of `BlitzXR.dll`
 - `VR\engine\blitzx3d-vr.patch`: the engine changes the game needs

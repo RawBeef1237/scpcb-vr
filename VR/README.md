@@ -62,7 +62,8 @@ In the `[vr]` section of `defaults.ini` (copy them to `options.ini` to override)
 
 - `VR.bb`: the game's VR module; small hooks in `Main.bb`, `MapSystem.bb`, `UpdateEvents.bb`
 - `Userlibs\BlitzXR.decls`, `BlitzXR.dll`, `openxr_loader.dll`: the OpenXR bridge and the Khronos loader (prebuilt, 32-bit)
-- `dxvk\d3d9.dll`: DXVK 3.1.1 (32-bit), used with `renderer = dxvk`
+- `dxvk\d3d9.dll`: DXVK 3.1.1 (32-bit), used with `renderer = dxvk`; `wineopenxr.dll` (built from `VR\blitzxr\wineopenxr`)
+  tells DXVK which Vulkan extensions OpenXR needs
 - `GFX\VR\`: hand models and texture; `GFX\shaders\VRHudKey.fx`: desktop HUD shader
 - `VR\blitzxr\`: source of `BlitzXR.dll`
 - `VR\engine\blitzx3d-vr.patch`: the engine changes the game needs

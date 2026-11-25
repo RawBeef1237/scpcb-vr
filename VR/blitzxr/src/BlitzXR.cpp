@@ -1187,6 +1187,18 @@ static bool vkSetupFromDxvk() {
 		}
 	}
 
+	// The runtime calls functions of the extensions it asks for without checking them, and crashes if DXVK didn't
+	// enable them on its device (wineopenxr.dll tells DXVK to): look for one function of each first.
+	const struct { const char* ext; const char* fn; } need[] = {
+		{ "VK_KHR_get_memory_requirements2", "vkGetImageMemoryRequirements2KHR" },
+		{ "VK_KHR_timeline_semaphore", "vkGetSemaphoreCounterValueKHR" },
+		{ "VK_KHR_external_memory_win32", "vkGetMemoryWin32HandlePropertiesKHR" },
+		{ "VK_KHR_external_semaphore_win32", "vkImportSemaphoreWin32HandleKHR" },
+	};
+	for (auto& x : need)
+		if ((" " + de + " ").find(std::string(" ") + x.ext + " ") != std::string::npos && !p_vkGetDeviceProcAddr(S.vkDevice, x.fn))
+			return fail("DXVK did not enable %s, which the OpenXR runtime needs (is wineopenxr.dll next to the exe?)", x.ext);
+
 	VkCommandPoolCreateInfo pci{ VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
 	pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
 	pci.queueFamilyIndex = S.vkQueueFamily;

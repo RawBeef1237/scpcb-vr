@@ -17,3 +17,12 @@ if(MSVC)
 else()
   target_link_options(BlitzXR PRIVATE -static -static-libgcc -static-libstdc++ -Wl,--enable-stdcall-fixup)
 endif()
+
+# extension list for DXVK (see the file); goes next to the exe like BlitzXR.dll
+add_library(wineopenxr SHARED wineopenxr/wineopenxr.cpp wineopenxr/wineopenxr.def)
+set_target_properties(wineopenxr PROPERTIES PREFIX "")
+if(MSVC)
+  set_property(TARGET wineopenxr PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
+else()
+  target_link_options(wineopenxr PRIVATE -static -static-libgcc -static-libstdc++ -Wl,--enable-stdcall-fixup)
+endif()

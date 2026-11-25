@@ -1,0 +1,4 @@
+LIBRARY wineopenxr
+EXPORTS
+    __wineopenxr_GetVulkanInstanceExtensions=GetInstanceExt
+    __wineopenxr_GetVulkanDeviceExtensions=GetDeviceExt

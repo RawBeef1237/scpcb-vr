@@ -192,6 +192,14 @@ Function VR_Init()
 	Else
 		VRInitError = XR_GetError()
 		DebugLog "VR disabled: " + VRInitError
+		; VR couldn't use DXVK: start again on the normal Direct3D (-nodxvk, so this happens once)
+		If Instr(VRInitError, "DXVK") > 0 And HasCLIFlag("dxvk") And (Not HasCLIFlag("nodxvk")) Then
+			Local exe$ = SystemProperty("appfile")
+			If exe <> "" And Lower(Right(exe, 11)) <> "blitzcc.exe" Then
+				ExecFile Chr(34) + exe + Chr(34) + " " + Trim(Trim(Replace(" " + CommandLine() + " ", " -dxvk ", " ")) + " -nodxvk")
+				End
+			EndIf
+		EndIf
 	EndIf
 End Function
 

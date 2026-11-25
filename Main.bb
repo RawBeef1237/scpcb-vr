@@ -268,6 +268,7 @@ EndIf
 
 Include "VR.bb"
 VR_Init()
+If HasCLIFlag("dxvk") Then api_SetForegroundWindow(Int(SystemProperty("apphwnd"))) ; started by RestartWithDXVK, which leaves the window behind
 
 Global GrayScaleFX% = LoadEffect_Strict("GFX\shaders\Grayscale.fx")
 Global MenuScale# = CalculateMenuScale()
@@ -7042,13 +7043,15 @@ Function DrawMenu()
 	
 	Local x%, y%, width%, height%
 	Local steamOverlayActive = SteamActive And Steam_GetOverlayState()
-	If (api_GetFocus() = 0 Lor steamOverlayActive) And EndingTimer=0 And SelectedEnding="" Then ;Game is out of focus -> pause the game
+	; (VR doesn't need the desktop window in front: the headset and controllers work either way)
+	Local outOfFocus% = (api_GetFocus() = 0) And (Not VREnabled)
+	If (outOfFocus Lor steamOverlayActive) And EndingTimer=0 And SelectedEnding="" Then ;Game is out of focus -> pause the game
 		If (Not IsPaused()) Then
 			MenuOpen = True
 			UpdateMenuState()
 		EndIf
 		;Reduce the CPU take while game is not in focus, unless Steam overlay is active
-		If Not steamOverlayActive Then Delay 1000
+		If outOfFocus And (Not steamOverlayActive) Then Delay 1000
 	EndIf
 	If MenuOpen Then
 		
